@@ -21,8 +21,8 @@ class DashboardApp(ctk.CTk):
         super().__init__()
 
         self.title("GhostAssist // Control Center")
-        self.geometry("1020x700")
-        self.minsize(920, 620)
+        self.geometry("1040x740")
+        self.minsize(960, 680)
         self.configure(fg_color=BG_DARK)
 
         ctk.set_appearance_mode("dark")
@@ -38,7 +38,7 @@ class DashboardApp(ctk.CTk):
         self._load_profiles_list()
 
     def _setup_layout(self):
-        self.grid_columnconfigure(0, weight=4, minsize=370)
+        self.grid_columnconfigure(0, weight=4, minsize=400)
         self.grid_columnconfigure(1, weight=5)
         self.grid_rowconfigure(0, weight=1)
 
@@ -141,7 +141,7 @@ class DashboardApp(ctk.CTk):
         self.res_combo.set("1280x720 (Быстро, ~45 КБ)" if "1280" in current_res else "1920x1080 (Четко, ~90 КБ)")
         self.res_combo.pack(fill="x", padx=16, pady=(2, 12))
 
-        # Карточка 3: Интерактивная настройка ВСЕХ горячих клавиш
+        # Карточка 3: Полный список горячих клавиш (все 6 биндов)
         hotkeys_card = ctk.CTkFrame(
             left_container, 
             fg_color=SURFACE_CARD, 
@@ -150,26 +150,38 @@ class DashboardApp(ctk.CTk):
             border_color=BORDER_COLOR
         )
         hotkeys_card.grid(row=2, column=0, sticky="nsew")
+        hotkeys_card.grid_rowconfigure(1, weight=1)
+        hotkeys_card.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
             hotkeys_card, 
             text="ГОРЯЧИЕ КЛАВИШИ (КЛИК ДЛЯ ЗАПИСИ)", 
             font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
             text_color=TEXT_MUTED
-        ).pack(anchor="w", padx=16, pady=(10, 4))
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=(10, 4))
 
-        # Полный список настраиваемых клавиш
+        # Скроллируемый контейнер для биндов (гарантирует идеальное отображение)
+        hotkeys_scroll = ctk.CTkScrollableFrame(
+            hotkeys_card,
+            fg_color="transparent",
+            scrollbar_button_color=BORDER_COLOR,
+            scrollbar_button_hover_color="#334155"
+        )
+        hotkeys_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+
+        # Все 6 действий системы
         hotkey_items = [
             ("HOTKEY_SCREEN", "Фуллскрин скрин", settings.hotkey_screen),
             ("HOTKEY_SNIP", "Снайпер (выделение)", settings.hotkey_snip),
             ("HOTKEY_AUDIO", "Звук (Loopback)", settings.hotkey_audio),
             ("HOTKEY_MODE", "TEST ↔ INTERVIEW", settings.hotkey_mode),
             ("HOTKEY_HUD", "Скрыть / Показать HUD", settings.hotkey_hud),
+            ("HOTKEY_DOCK", "Сместить (Верх / Низ)", settings.hotkey_dock),
         ]
 
         for env_key, label_text, default_val in hotkey_items:
-            row = ctk.CTkFrame(hotkeys_card, fg_color="transparent")
-            row.pack(fill="x", padx=16, pady=3)
+            row = ctk.CTkFrame(hotkeys_scroll, fg_color="transparent")
+            row.pack(fill="x", padx=8, pady=3)
 
             ctk.CTkLabel(
                 row, 
@@ -182,8 +194,8 @@ class DashboardApp(ctk.CTk):
                 row,
                 text=default_val,
                 font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
-                width=115,
-                height=24,
+                width=120,
+                height=26,
                 fg_color=SURFACE_INNER,
                 border_width=1,
                 border_color=BORDER_COLOR,
@@ -283,7 +295,7 @@ class DashboardApp(ctk.CTk):
         def on_key_press(event):
             key = event.keysym.lower()
             
-            # 1. Отслеживаем клавиши-модификаторы
+            # 1. Отслеживаем модификаторы
             mods_map = {
                 "alt_l": "<alt>", "alt_r": "<alt>",
                 "control_l": "<ctrl>", "control_r": "<ctrl>",
@@ -298,27 +310,41 @@ class DashboardApp(ctk.CTk):
             is_function_key = key.startswith("f") and key[1:].isdigit() and (1 <= int(key[1:]) <= 12)
             is_safe_service_key = key in ["pause", "scroll_lock"]
 
-            # ЗАЩИТА: если модификаторы (Alt/Ctrl/Shift) не зажаты, а клавиша — обычный символ для ввода кода
+            # ЗАЩИТА ЛАЙВКОДИНГА: запрет одиночных букв, цифр и символов ввода
             if not pressed_mods and not (is_function_key or is_safe_service_key):
                 self.unbind("<KeyPress>")
                 self.active_binding_key = None
                 
-                # Возвращаем текущее безопасное значение на кнопку
+                # Безопасный возврат текущего значения
                 current_val = getattr(settings, env_key.lower(), "<alt>+x")
-                target_btn.configure(text=current_val, text_color=ACCENT_GREEN, fg_color=SURFACE_INNER)
+                if hasattr(current_val, "get_secret_value"):
+                    current_val = current_val.get_secret_value()
+                target_btn.configure(text=str(current_val), text_color=ACCENT_GREEN, fg_color=SURFACE_INNER)
                 
                 messagebox.showwarning(
                     "Опасная клавиша",
                     f"Клавиша '{key}' используется при наборе кода и текста!\n\n"
                     "Чтобы не сломать ввод на лайвкодинге:\n"
-                    "• Зажмите Alt / Ctrl / Shift + нужную букву (например, Alt+T)\n"
+                    "• Зажмите Alt / Ctrl / Shift + нужную букву (например: Alt+{key})\n"
                     "• Либо используйте функциональные клавиши (F1-F12, Pause)."
                 )
                 return
 
-            # 3. Форматируем для pynput
+            # 3. Нормализация специальных названий клавиш для pynput
+            keys_remap = {
+                "down": "<down>",
+                "up": "<up>",
+                "left": "<left>",
+                "right": "<right>",
+                "escape": "<esc>",
+                "return": "<enter>",
+                "space": "<space>"
+            }
+
             if is_function_key or is_safe_service_key:
                 main_key = f"<{key}>"
+            elif key in keys_remap:
+                main_key = keys_remap[key]
             else:
                 main_key = key if len(key) == 1 else f"<{key}>"
 
