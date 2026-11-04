@@ -3,13 +3,11 @@ import tkinter as tk
 import ctypes
 from ctypes import wintypes
 
-# Win32 API константы для stealth-режима
-WDA_NONE = 0x00000000
 WDA_EXCLUDEFROMCAPTURE = 0x00000011
 
 
 class StealthHUD:
-    def __init__(self, width=820, initial_height=110, max_height=420):
+    def __init__(self, width=820, initial_height=90, max_height=400):
         self.width = width
         self.initial_height = initial_height
         self.max_height = max_height
@@ -21,80 +19,80 @@ class StealthHUD:
         self._setup_widgets()
         self._apply_stealth_affinity()
 
-        # Запуск цикла опроса очереди
         self.root.after(30, self._poll_queue)
 
     def _setup_window(self):
         self.root.title("GhostHUD")
-        self.root.overrideredirect(True)  # Убираем рамки Windows
-        self.root.attributes("-topmost", True)  # Всегда поверх окон
-        self.root.attributes("-alpha", 0.90)  # Полупрозрачность
-        self.root.configure(bg="#0b0f19")
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.attributes("-alpha", 0.92)
+        self.root.configure(bg="#030712")
 
-        # Центрируем плашку вверху экрана
         screen_w = self.root.winfo_screenwidth()
         self.pos_x = (screen_w - self.width) // 2
-        self.pos_y = 18
+        self.pos_y = 16
 
         self.root.geometry(f"{self.width}x{self.initial_height}+{self.pos_x}+{self.pos_y}")
 
     def _setup_widgets(self):
-        # Контейнер с внутренними отступами
-        self.container = tk.Frame(self.root, bg="#0b0f19", padx=16, pady=10)
+        # Внешняя рамка с эффектом тонкого бордера
+        self.border_frame = tk.Frame(self.root, bg="#1e293b", padx=1, pady=1)
+        self.border_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.container = tk.Frame(self.border_frame, bg="#080e1a", padx=16, pady=10)
         self.container.pack(fill=tk.BOTH, expand=True)
 
-        # Верхняя статусная строка (режим, состояние)
-        self.status_label = tk.Label(
-            self.container,
-            text="● [READY]",
-            font=("Segoe UI", 9, "bold"),
-            fg="#10b981",  # Изумрудный акцент
-            bg="#0b0f19",
-            anchor="w"
-        )
-        self.status_label.pack(fill=tk.X, pady=(0, 4))
+        # Хедер плашки
+        header = tk.Frame(self.container, bg="#080e1a")
+        header.pack(fill=tk.X, pady=(0, 4))
 
-        # Основной текст ответа: wraplength переносит текст, не вылезая за границы
-        wrap_width = self.width - 40
-        self.answer_label = tk.Label(
+        self.status_label = tk.Label(
+            header,
+            text="● [TEST] READY",
+            font=("Consolas", 9, "bold"),
+            fg="#10b981",
+            bg="#080e1a"
+        )
+        self.status_label.pack(side=tk.LEFT)
+
+        hint_label = tk.Label(
+            header,
+            text="Mouse4: Скрин | Mouse5: Аудио | Alt+M: Режим",
+            font=("Segoe UI", 8),
+            fg="#475569",
+            bg="#080e1a"
+        )
+        hint_label.pack(side=tk.RIGHT)
+
+        # Блок для текста вопроса и ответа
+        wrap_w = self.width - 36
+        self.content_label = tk.Label(
             self.container,
-            text="Ожидание триггера...",
+            text="Ожидание входящей задачи...",
             font=("Segoe UI", 11),
-            fg="#e2e8f0",
-            bg="#0b0f19",
+            fg="#cbd5e1",
+            bg="#080e1a",
             anchor="nw",
             justify=tk.LEFT,
-            wraplength=wrap_width
+            wraplength=wrap_w
         )
-        self.answer_label.pack(fill=tk.BOTH, expand=True)
+        self.content_label.pack(fill=tk.BOTH, expand=True)
 
     def _apply_stealth_affinity(self):
-        """Прячет окно от систем видеозахвата, скриншотов и демонстрации экрана."""
         try:
             self.root.update_idletasks()
             hwnd = wintypes.HWND(self.root.winfo_id())
-            user32 = ctypes.windll.user32
-            res = user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
-            if res:
-                print("[HUD] Stealth Affinity активирован (невидим для захвата экрана).")
-            else:
-                print(f"[HUD WARN] SetWindowDisplayAffinity вернул 0. Код ошибки: {ctypes.GetLastError()}")
+            ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
         except Exception as e:
-            print(f"[HUD ERROR] Ошибка применения stealth-атрибута: {e}")
+            print(f"[HUD ERROR] {e}")
 
     def _adjust_window_size(self):
-        """Динамически пересчитывает высоту окна под размер входящего текста."""
         self.root.update_idletasks()
-        
-        # Получаем реальную требуемую высоту виджетов
-        req_height = self.container.winfo_reqheight() + 10
+        req_height = self.container.winfo_reqheight() + 8
         target_height = max(self.initial_height, min(req_height, self.max_height))
-        
-        # Обновляем геометрию без сдвига по X и Y
         self.root.geometry(f"{self.width}x{target_height}+{self.pos_x}+{self.pos_y}")
 
     def update_text(self, text: str = None, status: str = None):
-        """Потокобезопасная отправка данных в UI через очередь."""
         self.msg_queue.put(("TEXT", text, status))
 
     def toggle_visibility(self):
@@ -110,13 +108,17 @@ class StealthHUD:
                     _, text, status = item
                     if status:
                         self.status_label.config(text=status)
+                        if "СЛУШАЮ" in status or "ЗАПРОС" in status:
+                            self.status_label.config(fg="#f59e0b")
+                        elif "READY" in status or "ГОТОВО" in status:
+                            self.status_label.config(fg="#10b981")
                     if text:
-                        self.answer_label.config(text=text)
+                        self.content_label.config(text=text)
                     self._adjust_window_size()
 
                 elif action == "TOGGLE":
                     self.is_visible = not self.is_visible
-                    self.root.attributes("-alpha", 0.90 if self.is_visible else 0.0)
+                    self.root.attributes("-alpha", 0.92 if self.is_visible else 0.0)
 
         except queue.Empty:
             pass
