@@ -66,18 +66,24 @@ class StealthHUD:
     def _poll_queue(self):
         try:
             while True:
-                action, text, status = self.msg_queue.get_nowait()
+                item = self.msg_queue.get_nowait()
+                action = item[0]
+                
                 if action == "TEXT":
-                    if text is not None:
-                        self.answer_label.config(text=text)
-                    if status is not None:
+                    _, text, status = item
+                    if status:
                         self.status_label.config(text=status)
+                    if text:
+                        self.answer_label.config(text=text)
+                    self.root.update_idletasks()
+                    
                 elif action == "TOGGLE":
                     self.is_visible = not self.is_visible
                     self.root.attributes("-alpha", 0.88 if self.is_visible else 0.0)
+                    
         except queue.Empty:
             pass
-        self.root.after(40, self._poll_queue)
+        self.root.after(30, self._poll_queue)
 
     def run(self):
         self.root.mainloop()

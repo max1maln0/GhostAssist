@@ -15,15 +15,14 @@ class AssistantController:
         if self.is_busy:
             return
         self.is_busy = True
-        self.hud.update_text("Анализирую экран...", status=f"◐ [{self.ctx.mode}] ЗАПРОС...")
+        self.hud.update_text("Считываю экран...", status=f"◐ [{self.ctx.mode}] ЗАПРОС...")
 
         def task():
             try:
-                self.worker.analyze_screen_stream(
-                    on_chunk_callback=lambda txt: self.hud.update_text(
-                        txt, status=f"● [{self.ctx.mode}] ГОТОВО"
-                    )
-                )
+                def handle_chunk(txt):
+                    self.hud.update_text(txt, status=f"● [{self.ctx.mode}] ГОТОВО")
+
+                self.worker.analyze_screen_stream(on_chunk_callback=handle_chunk)
             finally:
                 self.is_busy = False
 
