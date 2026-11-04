@@ -1,0 +1,22 @@
+# Секреты и переменные окружения
+.env
+*.env
+!.env.example
+
+# Личные профили и легенды (резюме, личные данные)
+config/profiles/*
+!config/profiles/example_legend.md
+config/user_settings.json
+
+# Python кэш и окружение
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+
+# Логи и временные дампы
+*.log
+*.wav
+*.jpg
+*.png
