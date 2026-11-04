@@ -6,7 +6,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 class AppSettings(BaseSettings):
     gemini_api_key: SecretStr = Field(..., alias="GEMINI_API_KEY")
-    gemini_model: str = Field("gemini-2.5-flash", alias="GEMINI_MODEL")
+    gemini_model: str = Field("gemini-2.0-flash", alias="GEMINI_MODEL")
     active_profile: str = Field("example_legend.md", alias="ACTIVE_PROFILE")
     
     # Максимальное разрешение сжатия в RAM для минимального пинга
