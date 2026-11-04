@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     hotkey_audio: str = Field("<alt>+r", alias="HOTKEY_AUDIO")
     hotkey_mode: str = Field("<alt>+m", alias="HOTKEY_MODE")
     hotkey_hud: str = Field("<alt>+x", alias="HOTKEY_HUD")
+    hotkey_snip: str = Field("<alt>+s", alias="HOTKEY_SNIP")
 
 
 settings = Settings()

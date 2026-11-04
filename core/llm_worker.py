@@ -46,32 +46,33 @@ class LLMWorker:
 
         threading.Thread(target=_warm, daemon=True).start()
 
-    def capture_screen_ram(self) -> bytes:
-        """Снимает кадр в RAM, быстро сжимает в JPEG без сохранения на диск."""
+    def capture_screen_ram(self, bbox: dict = None) -> bytes:
+        """Снимает либо указанную область (bbox), либо весь основной экран."""
         t0 = time.time()
         with mss.mss() as sct:
-            # monitors[1] — основной рабочий экран
-            monitor = sct.monitors[1]
-            raw_shot = sct.grab(monitor)
+            # Если передана область — грабим ровно её, иначе полный монитор
+            grab_area = bbox if bbox else sct.monitors[1]
+            raw_shot = sct.grab(grab_area)
             
             img = Image.frombytes("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX")
             
-            # Быстрый билинейный ресайз экономит процессорные миллисекунды
-            img.thumbnail((settings.crop_width, settings.crop_height), Image.Resampling.BILINEAR)
+            # Для фрагмента ресайз не нужен, чтобы сохранить четкость шрифтов!
+            if not bbox:
+                img.thumbnail((settings.crop_width, settings.crop_height), Image.Resampling.BILINEAR)
             
             buf = io.BytesIO()
-            # quality=65 дает отличную читаемость текста при весе кадра ~40-60 КБ
-            img.save(buf, format="JPEG", quality=65, optimize=False)
+            img.save(buf, format="JPEG", quality=75, optimize=False)
             jpeg_bytes = buf.getvalue()
             buf.close()
             
-        print(f"[PERF] Захват и сжатие в RAM: {(time.time() - t0) * 1000:.1f} мс, размер: {len(jpeg_bytes) // 1024} КБ")
+        area_type = f"ROI {bbox['width']}x{bbox['height']}" if bbox else "FULL SCREEN"
+        print(f"[PERF] Снимок ({area_type}): {(time.time() - t0) * 1000:.1f} мс, вес: {len(jpeg_bytes) // 1024} КБ")
         return jpeg_bytes
 
-    def analyze_screen_stream(self, on_chunk_callback):
-        """Отправляет сжатый скриншот в Gemini и стримит ответ в оверлей."""
+    def analyze_screen_stream(self, on_chunk_callback, bbox: dict = None):
+        """Принимает опциональный bbox выделенной области."""
         t_start = time.time()
-        image_bytes = self.capture_screen_ram()
+        image_bytes = self.capture_screen_ram(bbox=bbox)
         sys_prompt = self.ctx.get_system_prompt()
         
         image_part = types.Part.from_bytes(
