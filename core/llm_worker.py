@@ -87,7 +87,7 @@ class LLMWorker:
                     config = types.GenerateContentConfig(
                         system_instruction=sys_prompt,
                         temperature=0.0,
-                        max_output_tokens=25 if self.ctx.mode == "TEST" else 250,
+                        max_output_tokens=120 if self.ctx.mode == "TEST" else 350,
                     )
 
                     response_stream = self.client.models.generate_content_stream(
