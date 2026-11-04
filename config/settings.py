@@ -1,29 +1,25 @@
-from pathlib import Path
-from pydantic import SecretStr, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 
-class AppSettings(BaseSettings):
-    gemini_api_key: SecretStr = Field(..., alias="GEMINI_API_KEY")
-    gemini_model: str = Field("gemini-2.0-flash", alias="GEMINI_MODEL")
-    active_profile: str = Field("example_legend.md", alias="ACTIVE_PROFILE")
-    
-    # Максимальное разрешение сжатия в RAM для минимального пинга
-    crop_width: int = Field(1280, alias="CROP_WIDTH")
-    crop_height: int = Field(720, alias="CROP_HEIGHT")
-
+class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=BASE_DIR / ".env",
+        env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore"
     )
 
-    @property
-    def profile_path(self) -> Path:
-        path = BASE_DIR / "config" / "profiles" / self.active_profile
-        if not path.exists():
-            return BASE_DIR / "config" / "profiles" / "example_legend.md"
-        return path
+    gemini_api_key: SecretStr = Field(..., alias="GEMINI_API_KEY")
+    gemini_model: str = Field("gemini-3.5-flash-lite", alias="GEMINI_MODEL")
+    active_profile: str = Field("example_legend.md", alias="ACTIVE_PROFILE")
+    crop_width: int = Field(1280, alias="CROP_WIDTH")
+    crop_height: int = Field(720, alias="CROP_HEIGHT")
 
-settings = AppSettings()
+    # Настраиваемые горячие клавиши
+    hotkey_screen: str = Field("<alt>+q", alias="HOTKEY_SCREEN")
+    hotkey_audio: str = Field("<alt>+r", alias="HOTKEY_AUDIO")
+    hotkey_mode: str = Field("<alt>+m", alias="HOTKEY_MODE")
+    hotkey_hud: str = Field("<alt>+x", alias="HOTKEY_HUD")
+
+
+settings = Settings()

@@ -6,23 +6,23 @@ from tkinter import messagebox
 from config.settings import settings
 
 
-# Фирменная палитра
-BG_DARK = "#030712"       # Глубокий обсидиан
-SURFACE_CARD = "#090f1d"  # Цвет карточек
-SURFACE_INNER = "#040812" # Внутренние поля ввода
-ACCENT_GREEN = "#10b981"  # Изумрудный акцент
-ACCENT_HOVER = "#059669"
-TEXT_MUTED = "#64748b"
-BORDER_COLOR = "#1e293b"
+# Фирменная тёмная палитра
+BG_DARK = "#030712"        # Глубокий обсидиан
+SURFACE_CARD = "#090f1d"   # Цвет карточек Bento
+SURFACE_INNER = "#040812"  # Внутренние поля ввода и селекторы
+ACCENT_GREEN = "#10b981"   # Изумрудный акцент
+ACCENT_HOVER = "#059669"   # Ховер акцента
+TEXT_MUTED = "#64748b"     # Приглушенный текст
+BORDER_COLOR = "#1e293b"   # Тонкие разделители
 
 
 class DashboardApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("GhostAssist // Terminal")
-        self.geometry("960x640")
-        self.minsize(880, 560)
+        self.title("GhostAssist // Control Center")
+        self.geometry("980x660")
+        self.minsize(900, 580)
         self.configure(fg_color=BG_DARK)
 
         ctk.set_appearance_mode("dark")
@@ -31,23 +31,26 @@ class DashboardApp(ctk.CTk):
         self.profiles_dir = os.path.join("config", "profiles")
         os.makedirs(self.profiles_dir, exist_ok=True)
 
+        self.hotkey_buttons = {}
+        self.active_binding_key = None
+
         self._setup_layout()
         self._load_profiles_list()
 
     def _setup_layout(self):
-        self.grid_columnconfigure(0, weight=3, minsize=320)
+        self.grid_columnconfigure(0, weight=3, minsize=340)
         self.grid_columnconfigure(1, weight=5)
         self.grid_rowconfigure(0, weight=1)
 
         # ==========================================
-        # ЛЕВАЯ КОЛОНКА (Служба, Конфигурация, Хоткеи)
+        # ЛЕВАЯ КОЛОНКА (Служба, Параметры, Хоткеи)
         # ==========================================
         left_container = ctk.CTkFrame(self, fg_color="transparent")
         left_container.grid(row=0, column=0, padx=(20, 10), pady=20, sticky="nsew")
         left_container.grid_rowconfigure(2, weight=1)
         left_container.grid_columnconfigure(0, weight=1)
 
-        # Карточка 1: Статус службы и запуск
+        # Карточка 1: Служба и статус перехватчика
         service_card = ctk.CTkFrame(
             left_container, 
             fg_color=SURFACE_CARD, 
@@ -55,7 +58,7 @@ class DashboardApp(ctk.CTk):
             border_width=1,
             border_color=BORDER_COLOR
         )
-        service_card.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        service_card.grid(row=0, column=0, sticky="ew", pady=(0, 12))
 
         brand_lbl = ctk.CTkLabel(
             service_card, 
@@ -63,7 +66,7 @@ class DashboardApp(ctk.CTk):
             font=ctk.CTkFont(family="Consolas", size=18, weight="bold"),
             text_color=ACCENT_GREEN
         )
-        brand_lbl.pack(pady=(16, 6))
+        brand_lbl.pack(pady=(14, 6))
 
         # Pill Status Badge
         self.status_pill = ctk.CTkFrame(
@@ -73,7 +76,7 @@ class DashboardApp(ctk.CTk):
             border_width=1,
             border_color="#451a24"
         )
-        self.status_pill.pack(pady=(0, 14))
+        self.status_pill.pack(pady=(0, 12))
 
         self.status_text = ctk.CTkLabel(
             self.status_pill,
@@ -90,13 +93,13 @@ class DashboardApp(ctk.CTk):
             fg_color=ACCENT_GREEN,
             hover_color=ACCENT_HOVER,
             text_color="#021c14",
-            height=38,
+            height=36,
             corner_radius=8,
             command=self.toggle_assistant_process
         )
-        self.run_btn.pack(fill="x", padx=16, pady=(0, 16))
+        self.run_btn.pack(fill="x", padx=16, pady=(0, 14))
 
-        # Карточка 2: Параметры инференса
+        # Карточка 2: Параметры инференса и снимков
         config_card = ctk.CTkFrame(
             left_container, 
             fg_color=SURFACE_CARD, 
@@ -104,26 +107,26 @@ class DashboardApp(ctk.CTk):
             border_width=1,
             border_color=BORDER_COLOR
         )
-        config_card.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        config_card.grid(row=1, column=0, sticky="ew", pady=(0, 12))
 
         ctk.CTkLabel(
             config_card, 
             text="ПАРАМЕТРЫ ЗАПРОСОВ", 
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             text_color=TEXT_MUTED
-        ).pack(anchor="w", padx=16, pady=(14, 8))
+        ).pack(anchor="w", padx=16, pady=(12, 6))
 
         ctk.CTkLabel(config_card, text="Модель Gemini", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=16)
         self.model_combo = ctk.CTkComboBox(
             config_card,
-            values=["gemini-3.5-flash-lite", "gemini-flash-latest", "gemini-3.5-flash"],
+            values=["gemini-3.5-flash-lite", "gemini-flash-latest", "gemini-3.5-flash", "gemini-3.1-flash-lite"],
             fg_color=SURFACE_INNER,
             border_color=BORDER_COLOR,
             button_color=BORDER_COLOR,
             command=self._on_model_changed
         )
         self.model_combo.set(settings.gemini_model)
-        self.model_combo.pack(fill="x", padx=16, pady=(4, 12))
+        self.model_combo.pack(fill="x", padx=16, pady=(4, 10))
 
         ctk.CTkLabel(config_card, text="Разрешение снимка (RAM)", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=16)
         self.res_combo = ctk.CTkComboBox(
@@ -136,9 +139,9 @@ class DashboardApp(ctk.CTk):
         )
         current_res = f"{settings.crop_width}x{settings.crop_height}"
         self.res_combo.set("1280x720 (Быстро, ~45 КБ)" if "1280" in current_res else "1920x1080 (Четко, ~90 КБ)")
-        self.res_combo.pack(fill="x", padx=16, pady=(4, 16))
+        self.res_combo.pack(fill="x", padx=16, pady=(4, 14))
 
-        # Карточка 3: Шпаргалка по горячим клавишам
+        # Карточка 3: Интерактивная настройка горячих клавиш
         hotkeys_card = ctk.CTkFrame(
             left_container, 
             fg_color=SURFACE_CARD, 
@@ -150,32 +153,45 @@ class DashboardApp(ctk.CTk):
 
         ctk.CTkLabel(
             hotkeys_card, 
-            text="БЫСТРЫЕ КЛАВИШИ", 
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text="НАСТРОЙКА КЛАВИШ (КЛИК ДЛЯ СМЕНЫ)", 
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
             text_color=TEXT_MUTED
         ).pack(anchor="w", padx=16, pady=(12, 6))
 
-        shortcuts = [
-            ("Mouse4 / Alt+Q", "Скриншот + Решение"),
-            ("Mouse5 / Alt+R", "Голос (Loopback)"),
-            ("Alt + M", "Смена TEST ↔ INTERVIEW"),
-            ("Alt + X", "Скрыть / Показать HUD")
+        hotkey_items = [
+            ("HOTKEY_SCREEN", "Скриншот + Решение", settings.hotkey_screen),
+            ("HOTKEY_AUDIO", "Запись звука (Loop)", settings.hotkey_audio),
+            ("HOTKEY_MODE", "Смена TEST ↔ INTERVIEW", settings.hotkey_mode),
+            ("HOTKEY_HUD", "Скрыть / Показать HUD", settings.hotkey_hud),
         ]
-        for key, desc in shortcuts:
+
+        for env_key, label_text, default_val in hotkey_items:
             row = ctk.CTkFrame(hotkeys_card, fg_color="transparent")
-            row.pack(fill="x", padx=16, pady=3)
+            row.pack(fill="x", padx=16, pady=4)
+
             ctk.CTkLabel(
                 row, 
-                text=key, 
-                font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
-                text_color=ACCENT_GREEN
-            ).pack(side="left")
-            ctk.CTkLabel(
-                row, 
-                text=desc, 
+                text=label_text, 
                 font=ctk.CTkFont(size=11),
                 text_color="#94a3b8"
-            ).pack(side="right")
+            ).pack(side="left")
+
+            btn = ctk.CTkButton(
+                row,
+                text=default_val,
+                font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
+                width=110,
+                height=26,
+                fg_color=SURFACE_INNER,
+                border_width=1,
+                border_color=BORDER_COLOR,
+                hover_color="#1e293b",
+                text_color=ACCENT_GREEN,
+                corner_radius=6,
+                command=lambda k=env_key: self._start_hotkey_capture(k)
+            )
+            btn.pack(side="right")
+            self.hotkey_buttons[env_key] = btn
 
         # ==========================================
         # ПРАВАЯ КОЛОНКА (Редактор легенды кандидата)
@@ -193,7 +209,7 @@ class DashboardApp(ctk.CTk):
 
         # Шапка редактора
         editor_header = ctk.CTkFrame(right_card, fg_color="transparent")
-        editor_header.grid(row=0, column=0, padx=18, pady=(16, 12), sticky="ew")
+        editor_header.grid(row=0, column=0, padx=18, pady=(14, 10), sticky="ew")
 
         ctk.CTkLabel(
             editor_header, 
@@ -206,7 +222,7 @@ class DashboardApp(ctk.CTk):
             editor_header,
             text="Сохранить",
             font=ctk.CTkFont(size=12, weight="bold"),
-            width=95,
+            width=90,
             height=30,
             fg_color=ACCENT_GREEN,
             hover_color=ACCENT_HOVER,
@@ -235,13 +251,13 @@ class DashboardApp(ctk.CTk):
             fg_color=SURFACE_INNER,
             button_color=BORDER_COLOR,
             dropdown_fg_color=SURFACE_CARD,
-            width=160,
+            width=170,
             height=30,
             command=self.load_selected_profile
         )
         self.profile_selector.pack(side="right")
 
-        # Текстовое поле в стиле редактора кода
+        # Текстовое поле легенды под IDE
         self.legend_textbox = ctk.CTkTextbox(
             right_card,
             font=ctk.CTkFont(family="Consolas", size=12),
@@ -254,10 +270,68 @@ class DashboardApp(ctk.CTk):
         )
         self.legend_textbox.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
+    def _start_hotkey_capture(self, env_key):
+        """Переводит кнопку в режим ожидания нажатия клавиш."""
+        self.active_binding_key = env_key
+        target_btn = self.hotkey_buttons[env_key]
+        target_btn.configure(text="[Нажми клавиши...]", text_color="#f59e0b", fg_color="#1e293b")
+
+        pressed_mods = set()
+
+        def on_key_press(event):
+            key = event.keysym.lower()
+            
+            # Распознавание модификаторов
+            mods_map = {
+                "alt_l": "<alt>", "alt_r": "<alt>",
+                "control_l": "<ctrl>", "control_r": "<ctrl>",
+                "shift_l": "<shift>", "shift_r": "<shift>"
+            }
+
+            if key in mods_map:
+                pressed_mods.add(mods_map[key])
+                return
+
+            # Основная клавиша
+            main_key = key
+            if len(main_key) == 1:
+                # Обычные символы: q, w, e, 1, 2
+                pass
+            elif main_key.startswith("f") and main_key[1:].isdigit():
+                # Функциональные: <f1>, <f2>
+                main_key = f"<{main_key}>"
+            elif main_key in ["space", "tab", "esc", "enter"]:
+                main_key = f"<{main_key}>"
+            else:
+                main_key = f"<{main_key}>"
+
+            # Сборка комбинации для pynput
+            combo_parts = sorted(list(pressed_mods)) + [main_key]
+            final_combo = "+".join(combo_parts)
+
+            self.unbind("<KeyPress>")
+            self.active_binding_key = None
+
+            # Запись в .env и обновление кнопки
+            self._update_env_var(env_key, final_combo)
+            target_btn.configure(text=final_combo, text_color=ACCENT_GREEN, fg_color=SURFACE_INNER)
+
+            if self.assistant_process and self.assistant_process.poll() is None:
+                messagebox.showinfo(
+                    "Хоткей обновлен", 
+                    f"Новый хоткей: {final_combo}\nПерезапустите службу ассистента кнопкой, чтобы применить."
+                )
+
+        self.bind("<KeyPress>", on_key_press)
+
     def _load_profiles_list(self):
         files = [f for f in os.listdir(self.profiles_dir) if f.endswith(".md")]
         if not files:
             files = ["example_legend.md"]
+            default_path = os.path.join(self.profiles_dir, "example_legend.md")
+            with open(default_path, "w", encoding="utf-8") as f:
+                f.write("# Опыт и специализация кандидата\n- Системный анализ, REST API, брокеры сообщений (Kafka, RabbitMQ)\n- PostgreSQL, проектирование ER-диаграмм, SQL-запросы\n- Опыт в финтех и энтерпрайз сервисах\n")
+
         self.profile_selector.configure(values=files)
         target = settings.active_profile if settings.active_profile in files else files[0]
         self.profile_selector.set(target)
@@ -289,7 +363,7 @@ class DashboardApp(ctk.CTk):
             path = os.path.join(self.profiles_dir, name)
             if not os.path.exists(path):
                 with open(path, "w", encoding="utf-8") as f:
-                    f.write(f"# Профиль: {name}\n- Системный анализ, REST API, брокеры сообщений\n- SQL, PostgreSQL, проектирование структур данных\n")
+                    f.write(f"# Профиль: {name}\n- Ключевые навыки под вакансию:\n- Проекты и кейсы:\n")
             self._load_profiles_list()
             self.profile_selector.set(name)
             self.load_selected_profile(name)
@@ -309,28 +383,35 @@ class DashboardApp(ctk.CTk):
         env_path = ".env"
         lines = []
         found = False
+        
         if os.path.exists(env_path):
             with open(env_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+
         new_lines = []
         for line in lines:
             if line.startswith(f"{key}="):
-                new_lines.append(f"{key}={value}\n")
+                new_lines.append(f"{key}={value}")
                 found = True
             else:
                 new_lines.append(line)
+
         if not found:
-            new_lines.append(f"{key}={value}\n")
+            new_lines.append(f"{key}={value}")
+
+        # Гарантируем, что каждая запись будет на своей отдельной строке
         with open(env_path, "w", encoding="utf-8") as f:
-            f.writelines(new_lines)
+            f.write("\n".join(new_lines) + "\n")
 
     def toggle_assistant_process(self):
         if self.assistant_process is None or self.assistant_process.poll() is not None:
+            # Запуск main.py в отдельном фоновом процессе
             self.assistant_process = subprocess.Popen([sys.executable, "main.py"])
             self.status_pill.configure(fg_color="#032617", border_color="#065f46")
             self.status_text.configure(text="● SERVICE ACTIVE (HOTKEYS ON)", text_color=ACCENT_GREEN)
             self.run_btn.configure(text="ОСТАНОВИТЬ СЛУЖБУ", fg_color="#e11d48", hover_color="#be123c", text_color="#ffffff")
         else:
+            # Остановка службы
             self.assistant_process.terminate()
             self.assistant_process = None
             self.status_pill.configure(fg_color="#1a0d14", border_color="#451a24")

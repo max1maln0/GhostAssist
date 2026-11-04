@@ -1,5 +1,6 @@
 import threading
 from pynput import mouse, keyboard
+from config.settings import settings
 from core.context_manager import ContextManager
 from core.llm_worker import LLMWorker
 from core.audio_worker import AudioWorker
@@ -61,28 +62,34 @@ class AssistantController:
         self.hud.update_text(f"Профиль: {new_mode}", status=f"● [{new_mode}] READY")
 
     def start_listeners(self):
-        # Боковые кнопки мыши
+        # Боковые кнопки мыши остаются резервным быстрым триггером
         def on_click(x, y, button, pressed):
             if not pressed:
                 return
-            if button == mouse.Button.x1:      # Mouse4: Скриншот
+            if button == mouse.Button.x1:
                 self.trigger_screen_solve()
-            elif button == mouse.Button.x2:    # Mouse5: Вкл/Выкл микрофон (Loopback)
+            elif button == mouse.Button.x2:
                 self.toggle_audio_listen()
 
         mouse_listener = mouse.Listener(on_click=on_click)
         mouse_listener.daemon = True
         mouse_listener.start()
 
-        # Клавиатурные хоткеи
-        hotkeys = keyboard.GlobalHotKeys({
-            '<alt>+q': self.trigger_screen_solve,
-            '<alt>+r': self.toggle_audio_listen,       # Alt + R: Аудио перехват
-            '<alt>+m': self.switch_mode,                # Alt + M: Смена TEST <-> INTERVIEW
-            '<alt>+x': self.hud.toggle_visibility       # Alt + X: Скрыть/Показать HUD
-        })
-        hotkeys.daemon = True
-        hotkeys.start()
+        # Динамические клавиатурные хоткеи из настроек
+        hotkey_bindings = {
+            settings.hotkey_screen: self.trigger_screen_solve,
+            settings.hotkey_audio: self.toggle_audio_listen,
+            settings.hotkey_mode: self.switch_mode,
+            settings.hotkey_hud: self.hud.toggle_visibility
+        }
+
+        try:
+            hotkeys = keyboard.GlobalHotKeys(hotkey_bindings)
+            hotkeys.daemon = True
+            hotkeys.start()
+            print(f"[HOTKEYS] Успешно зарегистрированы: {hotkey_bindings.keys()}")
+        except Exception as e:
+            print(f"[HOTKEYS ERROR] Ошибка регистрации хоткеев: {e}")
 
     def run(self):
         self.start_listeners()
