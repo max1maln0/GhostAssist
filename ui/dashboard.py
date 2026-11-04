@@ -273,17 +273,17 @@ class DashboardApp(ctk.CTk):
         self.legend_textbox.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
     def _start_hotkey_capture(self, env_key):
-        """Интерактивный перехват комбинации клавиш."""
+        """Интерактивный перехват с защитой от одиночных буквенно-цифровых клавиш."""
         self.active_binding_key = env_key
         target_btn = self.hotkey_buttons[env_key]
-        target_btn.configure(text="[Нажми...]", text_color="#f59e0b", fg_color="#1e293b")
+        target_btn.configure(text="[Нажми клавиши...]", text_color="#f59e0b", fg_color="#1e293b")
 
         pressed_mods = set()
 
         def on_key_press(event):
             key = event.keysym.lower()
             
-            # Словарь модификаторов Windows/Tkinter -> pynput
+            # 1. Отслеживаем клавиши-модификаторы
             mods_map = {
                 "alt_l": "<alt>", "alt_r": "<alt>",
                 "control_l": "<ctrl>", "control_r": "<ctrl>",
@@ -294,25 +294,41 @@ class DashboardApp(ctk.CTk):
                 pressed_mods.add(mods_map[key])
                 return
 
-            # Основная клавиша
-            main_key = key
-            if len(main_key) == 1:
-                pass
-            elif main_key.startswith("f") and main_key[1:].isdigit():
-                main_key = f"<{main_key}>"
-            elif main_key in ["space", "tab", "esc", "escape", "enter", "return"]:
-                main_key = f"<{main_key}>"
-            else:
-                main_key = f"<{main_key}>"
+            # 2. Проверяем, является ли клавиша безопасной без модификатора
+            is_function_key = key.startswith("f") and key[1:].isdigit() and (1 <= int(key[1:]) <= 12)
+            is_safe_service_key = key in ["pause", "scroll_lock"]
 
-            # Формируем итоговый хоткей
+            # ЗАЩИТА: если модификаторы (Alt/Ctrl/Shift) не зажаты, а клавиша — обычный символ для ввода кода
+            if not pressed_mods and not (is_function_key or is_safe_service_key):
+                self.unbind("<KeyPress>")
+                self.active_binding_key = None
+                
+                # Возвращаем текущее безопасное значение на кнопку
+                current_val = getattr(settings, env_key.lower(), "<alt>+x")
+                target_btn.configure(text=current_val, text_color=ACCENT_GREEN, fg_color=SURFACE_INNER)
+                
+                messagebox.showwarning(
+                    "Опасная клавиша",
+                    f"Клавиша '{key}' используется при наборе кода и текста!\n\n"
+                    "Чтобы не сломать ввод на лайвкодинге:\n"
+                    "• Зажмите Alt / Ctrl / Shift + нужную букву (например, Alt+T)\n"
+                    "• Либо используйте функциональные клавиши (F1-F12, Pause)."
+                )
+                return
+
+            # 3. Форматируем для pynput
+            if is_function_key or is_safe_service_key:
+                main_key = f"<{key}>"
+            else:
+                main_key = key if len(key) == 1 else f"<{key}>"
+
             combo_parts = sorted(list(pressed_mods)) + [main_key]
             final_combo = "+".join(combo_parts)
 
             self.unbind("<KeyPress>")
             self.active_binding_key = None
 
-            # Записываем в .env и обновляем вид кнопки
+            # Записываем в .env и обновляем кнопку
             self._update_env_var(env_key, final_combo)
             target_btn.configure(text=final_combo, text_color=ACCENT_GREEN, fg_color=SURFACE_INNER)
 
