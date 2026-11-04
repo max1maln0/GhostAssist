@@ -94,11 +94,10 @@ class LLMWorker:
                         model=model_name,
                         contents=[
                             image_part, 
-                            "Вопрос на экране. Дай только букву правильного ответа и короткий факт."
+                            "Считай экран и дай ответ СТРОГО по шаблону 'Вопрос: ...\\nОтвет: ...'."
                         ],
                         config=config
                     )
-
                     accumulated = ""
                     first_chunk = True
                     for chunk in response_stream:
