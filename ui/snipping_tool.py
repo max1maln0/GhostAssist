@@ -41,8 +41,11 @@ class SnippingOverlay:
 
     def _apply_stealth_affinity(self):
         try:
-            self.root.update_idletasks()
-            hwnd = wintypes.HWND(self.root.winfo_id())
+            self.root.update()
+            GA_ROOT = 2
+            hwnd = ctypes.windll.user32.GetAncestor(self.root.winfo_id(), GA_ROOT)
+            if not hwnd:
+                hwnd = self.root.winfo_id()
             ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
         except Exception as e:
             print(f"[SNIP WARN] Affinity error: {e}")

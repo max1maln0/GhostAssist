@@ -14,13 +14,8 @@ class GhostAssistApp:
     def __init__(self):
         print("[INIT] Запуск инициализации GhostAssist...")
         
-        # Контекст и профиль легенды кандидата
         self.context_manager = ContextManager()
-        
-        # Графический скрытый HUD
         self.hud = StealthHUD()
-        
-        # Рабочие воркеры инференса
         self.llm_worker = LLMWorker(self.context_manager)
         self.audio_worker = AudioWorker(self.context_manager)
         
@@ -43,7 +38,7 @@ class GhostAssistApp:
                         text=chunk, 
                         status=f"● [{mode_label}] ОТВЕТ"
                     ),
-                    bbox=None  # Захват всего экрана
+                    bbox=None
                 )
             except Exception as e:
                 self.hud.update_text(text=f"[Ошибка]: {e}", status="● [ОШИБКА]")
@@ -57,7 +52,6 @@ class GhostAssistApp:
         if self.is_busy:
             return
 
-        # Запуск SnippingOverlay в главном потоке Tkinter
         self.hud.root.after(0, lambda: SnippingOverlay(self._on_snip_selected))
 
     def _on_snip_selected(self, bbox: dict):
@@ -73,7 +67,7 @@ class GhostAssistApp:
                         text=chunk, 
                         status=f"● [{mode_label}] ОТВЕТ"
                     ),
-                    bbox=bbox  # Захват только выделенного фрагмента
+                    bbox=bbox
                 )
             except Exception as e:
                 self.hud.update_text(text=f"[Ошибка]: {e}", status="● [ОШИБКА]")
@@ -85,11 +79,9 @@ class GhostAssistApp:
     def toggle_audio_listen(self):
         """Переключение циклической записи системного звука (Loopback)."""
         if not self.audio_worker.is_recording:
-            # Начинаем слушать систему
             self.hud.update_text(status="🔴 [СЛУШАЮ СИСТЕМУ]")
             self.audio_worker.start_recording()
         else:
-            # Останавливаем запись и отправляем сэмплы
             self.hud.update_text(status="◐ [ДУМАЮ...]")
             
             def _worker():
@@ -117,7 +109,7 @@ class GhostAssistApp:
     def start_listeners(self):
         """Запуск глобальных перехватчиков кнопок мыши и хоткеев клавиатуры."""
         
-        # 1. Мышь: быстрые аппаратные боковые кнопки
+        # 1. Мышь: аппаратные боковые кнопки
         def on_click(x, y, button, pressed):
             if not pressed:
                 return
@@ -130,13 +122,14 @@ class GhostAssistApp:
         mouse_listener.daemon = True
         mouse_listener.start()
 
-        # 2. Клавиатурные хоткеи из настроек
+        # 2. Клавиатурные хоткеи
         hotkey_bindings = {
             settings.hotkey_screen: self.trigger_fullscreen_solve,
             settings.hotkey_snip: self.trigger_snip_solve,
             settings.hotkey_audio: self.toggle_audio_listen,
             settings.hotkey_mode: self.switch_mode,
-            settings.hotkey_hud: self.hud.toggle_visibility
+            settings.hotkey_hud: self.hud.toggle_visibility,
+            settings.hotkey_dock: self.hud.toggle_dock_position,  # Alt + Down: смена позиции
         }
 
         try:
@@ -145,12 +138,11 @@ class GhostAssistApp:
             hotkeys.start()
             print("[HOTKEYS] Зарегистрированы активные бинды:")
             for key_combo, func in hotkey_bindings.items():
-                print(f"  • {key_combo:<15} -> {func.__name__}")
+                print(f"  • {key_combo:<17} -> {func.__name__}")
         except Exception as e:
             print(f"[HOTKEYS ERROR] Ошибка инициализации глобальных хоткеев: {e}")
 
     def run(self):
-        """Старт слушателей и вход в главный оконный цикл HUD."""
         self.start_listeners()
         print("[READY] GhostAssist полностью готов к работе.")
         self.hud.run()
