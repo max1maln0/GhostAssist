@@ -5,3 +5,4 @@ python-dotenv>=1.0.1
 mss>=9.0.1
 Pillow>=10.3.0
 pynput>=1.7.6
+PyAudioWPatch>=0.2.12.6
