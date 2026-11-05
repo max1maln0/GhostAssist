@@ -24,21 +24,22 @@ class AppTests(unittest.TestCase):
 
         with patch("main.record_wav", side_effect=record) as capture:
             with patch.object(
-                self.app.llm, "generate", return_value="answer"
-            ) as generate:
-                self.app.audio()
-                self.assertTrue(entered.wait(2))
-                self.app.capture()
-                self.app.snip()
-                self.assertIs(self.app.tasks.state, State.RECORDING)
-                self.app.audio()
-                self.app.audio()
-                self.app.future.result(timeout=2)
-                self.app.poll()
-                self.assertIs(self.app.tasks.state, State.IDLE)
-                self.assertEqual(generate.call_args.args[:2], (b"wav", "audio/wav"))
-                capture.assert_called_once()
-                self.app.hud.update_text.assert_called_with("answer", "[TEST] ГОТОВО")
+                self.app.llm, "transcribe", return_value="question"
+            ) as transcribe:
+                with patch.object(self.app, "show_transcript") as review:
+                    self.app.audio()
+                    self.assertTrue(entered.wait(2))
+                    self.app.capture()
+                    self.app.snip()
+                    self.assertIs(self.app.tasks.state, State.RECORDING)
+                    self.app.audio()
+                    self.app.audio()
+                    self.app.future.result(timeout=2)
+                    self.app.poll()
+                    self.assertIs(self.app.tasks.state, State.REVIEW)
+                    review.assert_called_once()
+                    self.assertEqual(transcribe.call_args.args[0], b"wav")
+                    capture.assert_called_once()
 
     def test_cancel_drops_result_even_if_worker_returns_success(self):
         entered = threading.Event()

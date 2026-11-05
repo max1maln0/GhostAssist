@@ -1,6 +1,7 @@
 import ctypes
 import os
 import sys
+import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
 from queue import Empty, Full, Queue
 from threading import Event, Thread
@@ -32,6 +33,7 @@ class GhostAssistApp:
         self.worker = ThreadPoolExecutor(max_workers=1)
         self.future = None
         self.overlay = None
+        self.review = None
         self.closing = False
         self.listeners = []
         self.listener_failed = False
@@ -110,6 +112,8 @@ class GhostAssistApp:
             if task.cancel.is_set():
                 return None
             task.stop.set()
+            if audio:
+                return ("transcript", self.llm.transcribe(data, task.cancel))
             return self.llm.generate(
                 data,
                 "audio/wav" if audio else "image/jpeg",
@@ -123,12 +127,73 @@ class GhostAssistApp:
 
         self.future = self.worker.submit(work)
 
+    def show_transcript(self, task, text):
+        if not text or not text.strip():
+            raise GenerationError("Речь не распознана.")
+        self.hud.update_text(text, "ПРОВЕРЬТЕ ТРАНСКРИПЦИЮ")
+        self.review = tk.Toplevel(self.hud.root)
+        self.review.title("Проверка распознанной речи")
+        self.review.attributes("-topmost", True)
+        self.review.configure(bg="#080e1a")
+        editor = tk.Text(
+            self.review,
+            width=65,
+            height=8,
+            wrap="word",
+            bg="#080e1a",
+            fg="#cbd5e1",
+            insertbackground="white",
+        )
+        editor.pack(fill="both", expand=True, padx=12, pady=12)
+        editor.insert("1.0", text)
+
+        def submit():
+            question = editor.get("1.0", "end-1c").strip()
+            if not question:
+                return
+            self.review.destroy()
+            self.review = None
+            task.state = State.PROCESSING
+            _, mode, generation = self.session_task
+            current_generation, history = self.sessions.snapshot(mode)
+            if generation != current_generation or not self.settings.memory_enabled:
+                history = ()
+            prompt = self.context.get_system_prompt(mode=mode)
+            self.hud.update_text(question, "ЗАПРОС GEMINI")
+
+            def work():
+                return self.llm.generate(
+                    question.encode("utf-8"),
+                    "text/plain",
+                    prompt,
+                    task.publish,
+                    task.cancel,
+                    history=history,
+                    instruction="Ответь на вопрос пользователя.",
+                )
+
+            self.future = self.worker.submit(work)
+
+        controls = tk.Frame(self.review, bg="#080e1a")
+        controls.pack(pady=(0, 12))
+        tk.Button(controls, text="Отправить", command=submit).pack(side="left", padx=5)
+        tk.Button(controls, text="Отменить", command=self.cancel).pack(
+            side="left", padx=5
+        )
+        self.review.protocol("WM_DELETE_WINDOW", self.cancel)
+
     def cancel(self):
         task = self.tasks.active
         if not task:
             return
         self.tasks.cancel()
         self.hud.update_text("Задача отменена.", "ОТМЕНА")
+        if self.review:
+            self.review.destroy()
+            self.review = None
+            self.tasks.finish(task)
+            self.session_task = None
+            self.hud.update_text(status="ГОТОВО")
         if self.overlay:
             self.overlay.close()
             self.overlay = None
@@ -169,7 +234,10 @@ class GhostAssistApp:
             if self.future.done():
                 try:
                     result = self.future.result()
-                    if not task.cancel.is_set():
+                    if not task.cancel.is_set() and isinstance(result, tuple):
+                        self.show_transcript(task, result[1])
+                        task.state = State.REVIEW
+                    elif not task.cancel.is_set():
                         if (
                             self.settings.memory_enabled
                             and result
@@ -199,13 +267,17 @@ class GhostAssistApp:
                     if not task.cancel.is_set():
                         self.hud.update_text(str(exc), "ОШИБКА")
                 except Exception:  # noqa: BLE001 - isolate the application boundary
+                    if self.review:
+                        self.review.destroy()
+                        self.review = None
                     if not task.cancel.is_set():
                         self.hud.update_text("Не удалось обработать задачу.", "ОШИБКА")
                 finally:
                     if task.cancel.is_set():
                         self.hud.update_text(status="ГОТОВО")
-                    self.tasks.finish(task)
-                    self.session_task = None
+                    if task.state is not State.REVIEW:
+                        self.tasks.finish(task)
+                        self.session_task = None
                     self.future = None
             elif not task.cancel.is_set():
                 if task.state is State.RECORDING and task.stop.is_set():

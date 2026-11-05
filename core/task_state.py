@@ -10,6 +10,7 @@ class State(Enum):
     CAPTURING = auto()
     RECORDING = auto()
     PROCESSING = auto()
+    REVIEW = auto()
     STREAMING = auto()
     CANCELLING = auto()
 
