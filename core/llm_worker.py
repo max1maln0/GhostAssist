@@ -8,7 +8,7 @@ from google import genai
 from google.genai import errors, types
 from PIL import Image
 
-MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash")
+from config.settings import GEMINI_MODELS
 
 
 class GenerationError(RuntimeError):
@@ -18,7 +18,7 @@ class GenerationError(RuntimeError):
 class LLMWorker:
     def __init__(self, settings):
         self.settings = settings
-        self.models = tuple(dict.fromkeys((settings.gemini_model, *MODELS)))
+        self.models = tuple(dict.fromkeys((settings.gemini_model, *GEMINI_MODELS)))
 
     def capture_screen(self, bbox=None):
         with mss.mss() as capture:
@@ -91,7 +91,7 @@ class LLMWorker:
                             408: "Истекло время ожидания Gemini.",
                             504: "Истекло время ожидания Gemini.",
                         }.get(code, "Временный сбой Gemini.")
-                    except (asyncio.TimeoutError, httpx.TimeoutException):  # noqa: UP041 (Python 3.10)
+                    except (asyncio.TimeoutError, httpx.TimeoutException):
                         last = "Истекло время ожидания Gemini."
                     except httpx.TransportError:
                         last = "Не удалось подключиться к Gemini."
@@ -118,7 +118,7 @@ class LLMWorker:
                 temperature=0.2,
                 max_output_tokens=1024,
                 thinking_config=types.ThinkingConfig(thinking_level="MINIMAL")
-                if model in MODELS
+                if model in GEMINI_MODELS
                 else None,
             ),
         )

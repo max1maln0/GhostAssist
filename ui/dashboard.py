@@ -7,7 +7,14 @@ import customtkinter as ctk
 from pydantic import ValidationError
 
 from config.env_file import update_env
-from config.settings import PROFILES, ROOT, Settings, profile_path, validate_hotkeys
+from config.settings import (
+    GEMINI_MODELS,
+    PROFILES,
+    ROOT,
+    Settings,
+    profile_path,
+    validate_hotkeys,
+)
 
 # Фирменная тёмная палитра
 BG_DARK = "#030712"  # Глубокий обсидиан
@@ -141,12 +148,7 @@ class DashboardApp(ctk.CTk):
         )
         self.model_combo = ctk.CTkComboBox(
             config_card,
-            values=[
-                "gemini-3.5-flash-lite",
-                "gemini-flash-latest",
-                "gemini-3.5-flash",
-                "gemini-3.1-flash-lite",
-            ],
+            values=list(GEMINI_MODELS),
             fg_color=SURFACE_INNER,
             border_color=BORDER_COLOR,
             button_color=BORDER_COLOR,
@@ -174,7 +176,7 @@ class DashboardApp(ctk.CTk):
         )
         self.res_combo.pack(fill="x", padx=16, pady=(2, 12))
 
-        # Карточка 3: Полный список горячих клавиш (все 6 биндов)
+        # Карточка 3: Горячие клавиши
         hotkeys_card = ctk.CTkFrame(
             left_container,
             fg_color=SURFACE_CARD,
@@ -202,7 +204,6 @@ class DashboardApp(ctk.CTk):
         )
         hotkeys_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
-        # Все 6 действий системы
         hotkey_items = [
             ("HOTKEY_SCREEN", "Фуллскрин скрин", self.settings.hotkey_screen),
             ("HOTKEY_SNIP", "Снайпер (выделение)", self.settings.hotkey_snip),

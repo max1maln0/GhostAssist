@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env"
 PROFILES = ROOT / "config" / "profiles"
+GEMINI_MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash")
 
 
 def profile_path(name: str, directory: Path = PROFILES) -> Path:
@@ -34,7 +35,7 @@ class Settings(BaseSettings):
     )
 
     gemini_api_key: SecretStr = SecretStr("")
-    gemini_model: str = Field("gemini-3.5-flash-lite", min_length=1)
+    gemini_model: str = Field(GEMINI_MODELS[0], min_length=1)
     active_profile: str = "example_legend.md"
     crop_width: int = Field(1280, ge=160, le=7680)
     crop_height: int = Field(720, ge=120, le=4320)
