@@ -879,6 +879,7 @@ class DashboardApp(ctk.CTk):
     def _finish_exit(self):
         if self.dashboard_hotkey:
             self.dashboard_hotkey.stop()
+            self.dashboard_hotkey.join(timeout=1)
             self.dashboard_hotkey = None
         self.tray.stop()
         self.destroy()
