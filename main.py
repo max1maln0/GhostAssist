@@ -14,6 +14,7 @@ from core.audio_worker import AudioError, SegmentQueue, record_wav
 from core.context_manager import ContextManager
 from core.llm_worker import GenerationError, LLMWorker
 from core.session_manager import SessionManager
+from core.single_instance import SingleInstance
 from core.task_state import State, TaskState
 from ui.snipping_tool import SnippingOverlay
 from ui.stealth_hud import StealthHUD
@@ -521,19 +522,15 @@ class GhostAssistApp:
 
 def main():
     try:
-        settings = Settings()
-        validate_hotkeys(settings)
-        if not settings.has_api_key:
-            print("Укажите ключ Gemini в Dashboard или .env.", file=sys.stderr)
-            return 2
-        # Tk and MSS must see the same physical desktop coordinates.
-        set_dpi_context = getattr(
-            ctypes.windll.user32, "SetProcessDpiAwarenessContext", None
-        )
-        if set_dpi_context is None or not set_dpi_context(ctypes.c_void_p(-4)):
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        GhostAssistApp(settings).run("--managed" in sys.argv)
-        return 0
+        instance = SingleInstance("service")
+        if not instance.primary:
+            instance.close()
+            print("Служба GhostAssist уже запущена.", file=sys.stderr)
+            return 3
+        try:
+            return run_service()
+        finally:
+            instance.close()
     except KeyboardInterrupt:
         return 0
     except Exception:  # noqa: BLE001 - isolate the application boundary
@@ -542,6 +539,22 @@ def main():
             file=sys.stderr,
         )
         return 1
+
+
+def run_service():
+    settings = Settings()
+    validate_hotkeys(settings)
+    if not settings.has_api_key:
+        print("Укажите ключ Gemini в Dashboard или .env.", file=sys.stderr)
+        return 2
+    # Tk and MSS must see the same physical desktop coordinates.
+    set_dpi_context = getattr(
+        ctypes.windll.user32, "SetProcessDpiAwarenessContext", None
+    )
+    if set_dpi_context is None or not set_dpi_context(ctypes.c_void_p(-4)):
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    GhostAssistApp(settings).run("--managed" in sys.argv)
+    return 0
 
 
 if __name__ == "__main__":
