@@ -2,6 +2,7 @@
 
 import audioop
 import io
+import sys
 import threading
 import time
 import wave
@@ -88,6 +89,10 @@ def record_wav(
                         )
                         segmenter.feed(mono)
                         if segmenter.done:
+                            print(
+                                f"[metrics] vad_silence_ms={vad_options['silence_ms']}",
+                                file=sys.stderr,
+                            )
                             complete.set()
                             return None, audio.paComplete
                         return None, audio.paContinue
@@ -118,6 +123,9 @@ def record_wav(
                         raise AudioError("Устройство воспроизведения отключилось.")
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
+                        if segmenter is not None and not segmenter.active:
+                            deadline = time.monotonic() + seconds
+                            continue
                         break
                     stop.wait(min(remaining, 0.05))
             finally:
