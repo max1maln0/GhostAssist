@@ -1,5 +1,6 @@
 """Bounded WASAPI capture. The calling worker owns all native resources."""
 
+import audioop
 import io
 import threading
 import time
@@ -28,6 +29,7 @@ def record_wav(
     seconds: float,
     max_bytes: int,
     device_name: str = "",
+    vad_options=None,
 ) -> bytes:
     import pyaudiowpatch as audio
 
@@ -53,14 +55,42 @@ def record_wav(
             rate = int(device["defaultSampleRate"])
             if channels < 1 or rate < 1:
                 raise AudioError("Неверный формат устройства WASAPI.")
+            segmenter = None
+            resample_state = None
+            if vad_options:
+                import webrtcvad
+
+                from core.vad import VoiceSegmenter
+
+                if channels not in (1, 2):
+                    raise AudioError("VAD поддерживает моно и стерео устройства.")
+                segmenter = VoiceSegmenter(
+                    webrtcvad.Vad(vad_options["sensitivity"]),
+                    min_speech_ms=vad_options["min_speech_ms"],
+                    silence_ms=vad_options["silence_ms"],
+                    max_seconds=min(vad_options["max_seconds"], max_bytes / 32000),
+                )
             frame_size = channels * 2
             limit = min(max_bytes, int(seconds * rate) * frame_size)
             limit -= limit % frame_size
 
             def on_audio(data, frames, timing, flags):
+                nonlocal resample_state
                 with lock:
                     if stop.is_set() or cancel.is_set() or complete.is_set():
                         return None, audio.paComplete
+                    if segmenter is not None:
+                        mono = (
+                            audioop.tomono(data, 2, 0.5, 0.5) if channels == 2 else data
+                        )
+                        mono, resample_state = audioop.ratecv(
+                            mono, 2, 1, rate, 16000, resample_state
+                        )
+                        segmenter.feed(mono)
+                        if segmenter.done:
+                            complete.set()
+                            return None, audio.paComplete
+                        return None, audio.paContinue
                     remaining = limit - len(pcm)
                     pcm.extend(data[:remaining])
                     if len(pcm) >= limit:
@@ -99,6 +129,10 @@ def record_wav(
 
     if cancel.is_set():
         return b""
+    if segmenter is not None:
+        pcm = segmenter.result()
+        channels = 1
+        rate = 16000
     if not pcm:
         raise AudioError("Запись пуста. Включите воспроизведение и повторите.")
     with io.BytesIO() as buffer:

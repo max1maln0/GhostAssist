@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     audio_max_seconds: float = Field(60, ge=1, le=60)
     audio_max_mib: int = Field(12, ge=1, le=12)
     audio_device: str = ""
+    vad_enabled: bool = False
+    vad_min_speech_ms: int = Field(300, ge=30, le=3000)
+    vad_silence_ms: int = Field(900, ge=100, le=5000)
+    vad_max_seconds: int = Field(30, ge=1, le=60)
+    vad_sensitivity: int = Field(2, ge=0, le=3)
     memory_enabled: bool = True
     memory_depth: int = Field(6, ge=1, le=10)
     hotkey_screen: str = "<alt>+q"

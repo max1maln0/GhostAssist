@@ -8,3 +8,4 @@ Pillow>=10.3.0
 pynput>=1.7.6
 PyAudioWPatch>=0.2.12.9,<0.3
 customtkinter>=5.2.2,<6
+webrtcvad-wheels>=2.0.14,<2.1

@@ -114,6 +114,27 @@ class AudioTests(unittest.TestCase):
             self.capture(fail=True)
         self.assertTrue(self.backend.terminated)
 
+    def test_vad_capture_formats_wav(self):
+        stop = threading.Event()
+        backend = FakeAudio(bytes([1, 0, 1, 0]) * 48000, stop)
+        module = SimpleNamespace(
+            PyAudio=lambda: backend, paInt16=8, paComplete=1, paContinue=0
+        )
+        detector = SimpleNamespace(is_speech=lambda frame, rate: True)
+        vad = SimpleNamespace(Vad=lambda sensitivity: detector)
+        options = {
+            "sensitivity": 2,
+            "min_speech_ms": 30,
+            "silence_ms": 60,
+            "max_seconds": 1,
+        }
+        with patch.dict(sys.modules, pyaudiowpatch=module, webrtcvad=vad):
+            result = record_wav(stop, threading.Event(), 2, 32000, vad_options=options)
+        with wave.open(io.BytesIO(result)) as audio:
+            self.assertEqual((audio.getnchannels(), audio.getframerate()), (1, 16000))
+            self.assertGreater(audio.getnframes(), 0)
+            self.assertLessEqual(audio.getnframes() * 2, 32000)
+
     def test_device_selection_and_missing_device(self):
         stop = threading.Event()
         backend = FakeAudio(b"abcd", stop)

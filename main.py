@@ -96,7 +96,12 @@ class GhostAssistApp:
         if not self.settings.memory_enabled:
             history = ()
         self.session_task = (task, mode, generation)
-        self.hud.update_text("", "СЛУШАЮ СИСТЕМУ" if audio else "СКАН ЭКРАНА")
+        status = (
+            "VAD · ЗАПИСЬ"
+            if audio and self.settings.vad_enabled
+            else ("СЛУШАЮ СИСТЕМУ" if audio else "СКАН ЭКРАНА")
+        )
+        self.hud.update_text("", status)
 
         def work():
             started = monotonic()
@@ -107,6 +112,14 @@ class GhostAssistApp:
                     self.settings.audio_max_seconds,
                     self.settings.audio_max_mib * 1024 * 1024,
                     self.settings.audio_device,
+                    vad_options={
+                        "min_speech_ms": self.settings.vad_min_speech_ms,
+                        "silence_ms": self.settings.vad_silence_ms,
+                        "max_seconds": self.settings.vad_max_seconds,
+                        "sensitivity": self.settings.vad_sensitivity,
+                    }
+                    if self.settings.vad_enabled
+                    else None,
                 )
             else:
                 data = self.llm.capture_screen(bbox)

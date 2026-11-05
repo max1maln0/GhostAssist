@@ -194,6 +194,13 @@ class DashboardApp(ctk.CTk):
         self.device_combo.set(self.settings.audio_device or "По умолчанию")
         self.device_combo.pack(fill="x", padx=16, pady=(2, 6))
 
+        self.vad_switch = ctk.CTkSwitch(
+            config_card, text="VAD при записи", command=self._on_vad_changed
+        )
+        self.vad_switch.pack(anchor="w", padx=16, pady=4)
+        if self.settings.vad_enabled:
+            self.vad_switch.select()
+
         session_row = ctk.CTkFrame(config_card, fg_color="transparent")
         session_row.pack(fill="x", padx=16, pady=(0, 6))
         self.memory_switch = ctk.CTkSwitch(
@@ -477,6 +484,9 @@ class DashboardApp(ctk.CTk):
             self.api_entry.delete(0, "end")
             if not self.assistant_process:
                 self._show_status("КЛЮЧ СОХРАНЁН")
+
+    def _on_vad_changed(self):
+        self._save(VAD_ENABLED=str(bool(self.vad_switch.get())).lower())
 
     def _on_device_changed(self, value):
         self._save(AUDIO_DEVICE="" if value == "По умолчанию" else value)
