@@ -1,9 +1,13 @@
+import os
 import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from pynput import keyboard
+
 from config.settings import Settings, validate_hotkeys
+from main import GhostAssistApp
 from ui.dashboard import DashboardApp
 
 
@@ -95,6 +99,43 @@ class BackgroundTests(unittest.TestCase):
                 )
         app._stop_process.assert_not_called()
         app._bind_dashboard_hotkey.assert_called_once()
+
+    def test_hotkey_event_is_queued(self):
+        from queue import Queue
+
+        app = SimpleNamespace(
+            exit_requested=threading.Event(),
+            capturing_hotkey=False,
+            tray_commands=Queue(maxsize=4),
+        )
+        listener = keyboard.GlobalHotKeys(
+            {"<alt>+<home>": lambda: DashboardApp._enqueue_tray(app, "toggle")}
+        )
+        listener._on_press(keyboard.Key.alt, False)
+        listener._on_press(keyboard.Key.home, False)
+        listener._on_release(keyboard.Key.home, False)
+        listener._on_release(keyboard.Key.alt, False)
+        self.assertEqual(app.tray_commands.get_nowait(), "toggle")
+
+    def test_parent_cancel_command_then_eof(self):
+        reader, writer = os.pipe()
+        app = SimpleNamespace(enqueue=Mock(), cancel=object(), close=object())
+        thread = threading.Thread(
+            target=GhostAssistApp.watch_parent, args=(app, reader)
+        )
+        try:
+            thread.start()
+            os.write(writer, b"C")
+            os.close(writer)
+            writer = None
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(app.enqueue.call_args_list[0].args, (app.cancel,))
+            self.assertEqual(app.enqueue.call_args_list[1].args, (app.close,))
+        finally:
+            if writer is not None:
+                os.close(writer)
+            os.close(reader)
 
     def test_dashboard_hotkey_is_checked_for_conflicts(self):
         settings = Settings(_env_file=None)

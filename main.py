@@ -469,6 +469,18 @@ class GhostAssistApp:
         for listener in self.listeners:
             listener.stop()
 
+    def watch_parent(self, fd):
+        try:
+            while True:
+                command = os.read(fd, 1)
+                if not command:
+                    break
+                if command == b"C":
+                    self.enqueue(self.cancel)
+        except OSError:
+            pass
+        self.enqueue(self.close)
+
     def run(self, managed):
         settings = self.settings
         self.managed = managed
@@ -501,20 +513,9 @@ class GhostAssistApp:
             for listener in self.listeners:
                 listener.start()
             if managed:
-
-                def watch_parent():
-                    try:
-                        while True:
-                            command = os.read(sys.stdin.fileno(), 1)
-                            if not command:
-                                break
-                            if command == b"C":
-                                self.enqueue(self.cancel)
-                    except OSError:
-                        pass
-                    self.enqueue(self.close)
-
-                Thread(target=watch_parent, daemon=True).start()
+                Thread(
+                    target=self.watch_parent, args=(sys.stdin.fileno(),), daemon=True
+                ).start()
             self.hud.root.after(25, self.poll)
             self.hud.run()
             if self.listener_failed:
