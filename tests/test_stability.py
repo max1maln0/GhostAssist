@@ -136,6 +136,32 @@ class AudioTests(unittest.TestCase):
             self.assertGreater(audio.getnframes(), 0)
             self.assertLessEqual(audio.getnframes() * 2, 32000)
 
+    def test_vad_accepts_multichannel_loopback(self):
+        stop = threading.Event()
+        backend = FakeAudio(bytes([1, 0]) * 6 * 48000, stop)
+        backend.get_default_wasapi_loopback = lambda: {
+            "index": 1,
+            "maxInputChannels": 6,
+            "defaultSampleRate": 48000,
+        }
+        module = SimpleNamespace(
+            PyAudio=lambda: backend, paInt16=8, paComplete=1, paContinue=0
+        )
+        vad = SimpleNamespace(
+            Vad=lambda _: SimpleNamespace(is_speech=lambda frame, rate: True)
+        )
+        options = {
+            "sensitivity": 2,
+            "min_speech_ms": 30,
+            "silence_ms": 60,
+            "max_seconds": 1,
+        }
+        with patch.dict(sys.modules, pyaudiowpatch=module, webrtcvad=vad):
+            result = record_wav(stop, threading.Event(), 2, 32000, vad_options=options)
+        with wave.open(io.BytesIO(result)) as audio:
+            self.assertEqual(audio.getnchannels(), 1)
+            self.assertGreater(audio.getnframes(), 0)
+
     def test_device_selection_and_missing_device(self):
         stop = threading.Event()
         backend = FakeAudio(b"abcd", stop)

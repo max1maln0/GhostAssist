@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import wave
+from array import array
 
 
 class AudioError(RuntimeError):
@@ -63,8 +64,6 @@ def record_wav(
 
                 from core.vad import VoiceSegmenter
 
-                if channels not in (1, 2):
-                    raise AudioError("VAD поддерживает моно и стерео устройства.")
                 segmenter = VoiceSegmenter(
                     webrtcvad.Vad(vad_options["sensitivity"]),
                     min_speech_ms=vad_options["min_speech_ms"],
@@ -81,9 +80,19 @@ def record_wav(
                     if stop.is_set() or cancel.is_set() or complete.is_set():
                         return None, audio.paComplete
                     if segmenter is not None:
-                        mono = (
-                            audioop.tomono(data, 2, 0.5, 0.5) if channels == 2 else data
-                        )
+                        if channels == 1:
+                            mono = data
+                        elif channels == 2:
+                            mono = audioop.tomono(data, 2, 0.5, 0.5)
+                        else:
+                            samples = array("h", data)
+                            mono = array(
+                                "h",
+                                (
+                                    sum(samples[i : i + channels]) // channels
+                                    for i in range(0, len(samples), channels)
+                                ),
+                            ).tobytes()
                         mono, resample_state = audioop.ratecv(
                             mono, 2, 1, rate, 16000, resample_state
                         )
