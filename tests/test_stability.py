@@ -299,6 +299,36 @@ class GeminiTests(unittest.TestCase):
             fake.calls[0]["contents"][0].parts[0].inline_data.mime_type, "audio/wav"
         )
 
+    def test_transcription_timeout_cancel_and_service_error(self):
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as audio:
+            audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            audio.writeframes(bytes(640))
+        data = buffer.getvalue()
+        worker = LLMWorker(
+            Settings(
+                _env_file=None,
+                gemini_api_key="test",
+                request_timeout=1,
+                task_timeout=0.1,
+            )
+        )
+        fake = FakeGemini([[None]])
+        with patch("core.llm_worker.genai.Client", return_value=fake):
+            with self.assertRaisesRegex(GenerationError, "общее время"):
+                worker.transcribe(data, threading.Event())
+        self.assertTrue(fake.async_closed)
+        cancelled = threading.Event()
+        cancelled.set()
+        with patch("core.llm_worker.genai.Client") as client:
+            self.assertIsNone(worker.transcribe(data, cancelled))
+            client.assert_not_called()
+        fake = FakeGemini([[errors.ClientError(401, {"message": "secret"})]])
+        with patch("core.llm_worker.genai.Client", return_value=fake):
+            with self.assertRaises(GenerationError) as error:
+                worker.transcribe(data, threading.Event())
+        self.assertNotIn("secret", str(error.exception))
+
     def test_fallback_clears_partial_and_sends_wav(self):
         fake = FakeGemini(
             [[chunk("old"), errors.ServerError(503, {})], [chunk("new", "STOP")]]
