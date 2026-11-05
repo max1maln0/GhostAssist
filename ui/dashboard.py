@@ -42,6 +42,8 @@ class DashboardApp(ctk.CTk):
 
         self.assistant_process = None
         self.session_updates = Queue(maxsize=32)
+        self.device_updates = Queue(maxsize=1)
+        self.device_refreshing = False
         self.stopping_until = None
         self.restart_pending = False
         self.closing = False
@@ -58,6 +60,7 @@ class DashboardApp(ctk.CTk):
         self.hotkey_buttons = {}
         self._setup_layout()
         self._load_profiles_list()
+        self._refresh_devices()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.after(150, self._poll_process)
 
@@ -180,11 +183,7 @@ class DashboardApp(ctk.CTk):
         ctk.CTkLabel(config_card, text="Устройство системного звука").pack(
             anchor="w", padx=16
         )
-        try:
-            devices = list_loopback_devices()
-        except AudioError:
-            devices = []
-        self.audio_devices = ["По умолчанию", *devices]
+        self.audio_devices = ["По умолчанию"]
         self.device_combo = ctk.CTkComboBox(
             config_card,
             values=self.audio_devices,
@@ -193,9 +192,15 @@ class DashboardApp(ctk.CTk):
         )
         self.device_combo.set(self.settings.audio_device or "По умолчанию")
         self.device_combo.pack(fill="x", padx=16, pady=(2, 6))
+        self.refresh_devices_button = ctk.CTkButton(
+            config_card, text="Обновить устройства", command=self._refresh_devices
+        )
+        self.refresh_devices_button.pack(anchor="w", padx=16, pady=(0, 4))
 
         self.vad_switch = ctk.CTkSwitch(
-            config_card, text="VAD при записи", command=self._on_vad_changed
+            config_card,
+            text="VAD при записи · учитывайте согласие участников",
+            command=self._on_vad_changed,
         )
         self.vad_switch.pack(anchor="w", padx=16, pady=4)
         if self.settings.vad_enabled:
@@ -494,6 +499,24 @@ class DashboardApp(ctk.CTk):
             if not self.assistant_process:
                 self._show_status("КЛЮЧ СОХРАНЁН")
 
+    def _refresh_devices(self):
+        if self.device_refreshing:
+            return
+        self.device_refreshing = True
+        self.refresh_devices_button.configure(state="disabled")
+
+        def scan():
+            try:
+                result = (list_loopback_devices(), None)
+            except AudioError:
+                result = ([], "Не удалось получить список устройств WASAPI.")
+            try:
+                self.device_updates.put_nowait(result)
+            except Full:
+                pass
+
+        Thread(target=scan, daemon=True).start()
+
     def _on_auto_send_changed(self):
         self._save(AUTO_SEND_TRANSCRIPT=str(bool(self.auto_send_switch.get())).lower())
 
@@ -614,6 +637,17 @@ class DashboardApp(ctk.CTk):
                 pass
 
     def _poll_process(self):
+        try:
+            devices, error = self.device_updates.get_nowait()
+        except Empty:
+            pass
+        else:
+            self.device_refreshing = False
+            self.refresh_devices_button.configure(state="normal")
+            self.audio_devices = ["По умолчанию", *devices]
+            self.device_combo.configure(values=self.audio_devices)
+            if error and not self.closing:
+                messagebox.showwarning("Устройства", error)
         while True:
             try:
                 source, test_count, interview_count = self.session_updates.get_nowait()

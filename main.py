@@ -29,6 +29,7 @@ class GhostAssistApp:
         self.sessions = SessionManager(depth=settings.memory_depth)
         self.session_task = None
         self.session_question = None
+        self.task_started = None
         self.monitoring = False
         self.managed = False
         self.commands = Queue(maxsize=32)
@@ -100,6 +101,7 @@ class GhostAssistApp:
             history = ()
         self.session_task = (task, mode, generation)
         self.session_question = None
+        self.task_started = monotonic()
         status = (
             "VAD · ЗАПИСЬ"
             if audio and self.settings.vad_enabled
@@ -314,6 +316,12 @@ class GhostAssistApp:
                     if task.cancel.is_set():
                         self.hud.update_text(status="ГОТОВО")
                     if task.state is not State.REVIEW:
+                        if self.task_started is not None:
+                            print(
+                                f"[metrics] total_ms={(monotonic() - self.task_started) * 1000:.0f}",
+                                file=sys.stderr,
+                            )
+                            self.task_started = None
                         self.tasks.finish(task)
                         self.session_task = None
                     self.future = None
