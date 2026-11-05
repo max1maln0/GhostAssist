@@ -228,7 +228,7 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(previews, ["old", "", "new"])
         self.assertNotEqual(fake.calls[0]["model"], fake.calls[1]["model"])
         self.assertEqual(
-            fake.calls[0]["contents"][0].inline_data.mime_type, "audio/wav"
+            fake.calls[0]["contents"][0].parts[0].inline_data.mime_type, "audio/wav"
         )
         self.assertTrue(fake.async_closed and fake.sync_closed)
 

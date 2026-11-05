@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     task_timeout: float = Field(30, ge=0.1, le=120)
     audio_max_seconds: float = Field(60, ge=1, le=60)
     audio_max_mib: int = Field(12, ge=1, le=12)
+    memory_enabled: bool = True
+    memory_depth: int = Field(6, ge=1, le=10)
     hotkey_screen: str = "<alt>+q"
     hotkey_snip: str = "<alt>+s"
     hotkey_audio: str = "<alt>+r"

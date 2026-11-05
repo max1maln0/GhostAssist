@@ -12,6 +12,7 @@ from config.settings import Settings, validate_hotkeys
 from core.audio_worker import AudioError, record_wav
 from core.context_manager import ContextManager
 from core.llm_worker import GenerationError, LLMWorker
+from core.session_manager import SessionManager
 from core.task_state import State, TaskState
 from ui.snipping_tool import SnippingOverlay
 from ui.stealth_hud import StealthHUD
@@ -24,6 +25,8 @@ class GhostAssistApp:
         self.hud = StealthHUD()
         self.llm = LLMWorker(settings)
         self.tasks = TaskState()
+        self.sessions = SessionManager(depth=settings.memory_depth)
+        self.session_task = None
         self.commands = Queue(maxsize=32)
         self.worker = ThreadPoolExecutor(max_workers=1)
         self.future = None
@@ -84,7 +87,12 @@ class GhostAssistApp:
             self.submit(task, audio=True)
 
     def submit(self, task, bbox=None, audio=False):
-        prompt = self.context.get_system_prompt(mode="INTERVIEW" if audio else None)
+        mode = "INTERVIEW" if audio else self.context.mode
+        prompt = self.context.get_system_prompt(mode=mode)
+        generation, history = self.sessions.snapshot(mode)
+        if not self.settings.memory_enabled:
+            history = ()
+        self.session_task = (task, mode, generation)
         self.hud.update_text("", "СЛУШАЮ СИСТЕМУ" if audio else "СКАН ЭКРАНА")
 
         def work():
@@ -107,6 +115,7 @@ class GhostAssistApp:
                 prompt,
                 task.publish,
                 task.cancel,
+                history=history,
                 budget=self.settings.task_timeout
                 - (0 if audio else monotonic() - started),
             )
@@ -160,6 +169,21 @@ class GhostAssistApp:
                 try:
                     result = self.future.result()
                     if not task.cancel.is_set():
+                        if (
+                            self.settings.memory_enabled
+                            and result
+                            and self.session_task
+                        ):
+                            _, mode, generation = self.session_task
+                            question, separator, answer = result.partition("Ответ:")
+                            if separator and question.strip().startswith("Вопрос:"):
+                                self.sessions.add(
+                                    mode,
+                                    question.removeprefix("Вопрос:"),
+                                    answer,
+                                    generation,
+                                    task.cancel,
+                                )
                         self.hud.update_text(result, f"[{self.context.mode}] ГОТОВО")
                 except (AudioError, GenerationError) as exc:
                     if not task.cancel.is_set():
@@ -171,6 +195,7 @@ class GhostAssistApp:
                     if task.cancel.is_set():
                         self.hud.update_text(status="ГОТОВО")
                     self.tasks.finish(task)
+                    self.session_task = None
                     self.future = None
             elif not task.cancel.is_set():
                 if task.state is State.RECORDING and task.stop.is_set():
@@ -190,6 +215,7 @@ class GhostAssistApp:
             return
         self.closing = True
         self.cancel()
+        self.sessions.close()
         for listener in self.listeners:
             listener.stop()
 

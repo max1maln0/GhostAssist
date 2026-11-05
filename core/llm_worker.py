@@ -40,7 +40,7 @@ class LLMWorker:
             image.save(buffer, format="JPEG", quality=75)
             return buffer.getvalue()
 
-    async def _generate(self, data, mime_type, prompt, publish):
+    async def _generate(self, data, mime_type, prompt, publish, history):
         options = types.HttpOptions(
             timeout=int(self.settings.request_timeout * 1000),
             retry_options=types.HttpRetryOptions(attempts=1),
@@ -59,7 +59,9 @@ class LLMWorker:
                         await asyncio.sleep(0.4 * 2 ** (index - 1))
                     try:
                         return await asyncio.wait_for(
-                            self._stream(api, model, data, mime_type, prompt, publish),
+                            self._stream(
+                                api, model, data, mime_type, prompt, publish, history
+                            ),
                             self.settings.request_timeout,
                         )
                     except errors.APIError as exc:
@@ -102,18 +104,36 @@ class LLMWorker:
         finally:
             client.close()
 
-    async def _stream(self, api, model, data, mime_type, prompt, publish):
+    async def _stream(self, api, model, data, mime_type, prompt, publish, history):
         instruction = (
             "Ответь на вопрос из аудио."
             if mime_type == "audio/wav"
             else "Ответь на вопрос с изображения."
         )
+        contents = []
+        for item in history:
+            contents.extend(
+                [
+                    types.Content(
+                        role="user", parts=[types.Part.from_text(text=item.question)]
+                    ),
+                    types.Content(
+                        role="model", parts=[types.Part.from_text(text=item.answer)]
+                    ),
+                ]
+            )
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_bytes(data=data, mime_type=mime_type),
+                    types.Part.from_text(text=instruction),
+                ],
+            )
+        )
         stream = await api.models.generate_content_stream(
             model=model,
-            contents=[
-                types.Part.from_bytes(data=data, mime_type=mime_type),
-                instruction,
-            ],
+            contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=prompt,
                 temperature=0.2,
@@ -138,14 +158,18 @@ class LLMWorker:
             raise GenerationError("Gemini завершил генерацию без полного ответа.")
         return answer
 
-    def generate(self, data, mime_type, prompt, publish, cancel, *, budget=None):
+    def generate(
+        self, data, mime_type, prompt, publish, cancel, *, budget=None, history=()
+    ):
         async def run():
             if cancel.is_set():
                 return None
             timeout = self.settings.task_timeout if budget is None else budget
             if timeout <= 0:
                 raise GenerationError("Превышено общее время обработки.")
-            task = asyncio.create_task(self._generate(data, mime_type, prompt, publish))
+            task = asyncio.create_task(
+                self._generate(data, mime_type, prompt, publish, history)
+            )
             loop = asyncio.get_running_loop()
             deadline = loop.time() + timeout
             try:

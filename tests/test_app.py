@@ -99,3 +99,38 @@ class AppTests(unittest.TestCase):
                 future.result(timeout=2)
                 self.app.poll()
                 self.app.hud.root.destroy.assert_called_once()
+
+    def test_completed_response_enters_history_and_is_reused(self):
+        with patch.object(self.app.llm, "capture_screen", return_value=b"jpg"):
+            with patch.object(
+                self.app.llm,
+                "generate",
+                return_value="Вопрос: Первый?\nОтвет: Первый ответ",
+            ) as generate:
+                self.app.capture()
+                self.app.future.result(timeout=2)
+                self.app.poll()
+                self.app.capture()
+                self.app.future.result(timeout=2)
+                self.app.poll()
+                history = generate.call_args.kwargs["history"]
+                self.assertEqual(history[0].question, "Первый?")
+                self.assertEqual(history[0].answer, "Первый ответ")
+
+    def test_cancelled_response_never_enters_history(self):
+        entered = threading.Event()
+
+        def generate(data, mime_type, prompt, publish, cancel, **kwargs):
+            entered.set()
+            cancel.wait(2)
+            return "Вопрос: Поздний?\nОтвет: Поздний ответ"
+
+        with patch.object(self.app.llm, "capture_screen", return_value=b"jpg"):
+            with patch.object(self.app.llm, "generate", side_effect=generate):
+                self.app.capture()
+                self.assertTrue(entered.wait(2))
+                future = self.app.future
+                self.app.cancel()
+                future.result(timeout=2)
+                self.app.poll()
+                self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
