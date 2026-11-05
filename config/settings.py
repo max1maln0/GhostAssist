@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     memory_enabled: bool = True
     memory_depth: int = Field(6, ge=1, le=10)
     close_to_tray: bool = True
-    hotkey_dashboard: str = "<alt>+<home>"
+    hotkey_dashboard: str = "<ctrl>+<shift>+<f9>"
     hotkey_screen: str = "<alt>+q"
     hotkey_snip: str = "<alt>+s"
     hotkey_audio: str = "<alt>+r"
@@ -83,6 +83,53 @@ class Settings(BaseSettings):
         return bool(key and key.isascii() and key != "AIzaSyYourActualApiKeyHere")
 
 
+HOTKEY_LABELS = {
+    "hotkey_dashboard": "Показать / скрыть Dashboard",
+    "hotkey_screen": "Фуллскрин скрин",
+    "hotkey_snip": "Снайпер (выделение)",
+    "hotkey_audio": "Звук (Loopback)",
+    "hotkey_mode": "TEST ↔ INTERVIEW",
+    "hotkey_hud": "Скрыть / Показать HUD",
+    "hotkey_cancel": "Отменить задачу",
+    "hotkey_page_up": "Прокрутка HUD вверх",
+    "hotkey_page_down": "Прокрутка HUD вниз",
+    "hotkey_dock": "Сместить (Верх / Низ)",
+}
+
+
+class HotkeyValidationError(ValueError):
+    pass
+
+
+def format_hotkey(value):
+    names = {
+        "ctrl": "Ctrl",
+        "shift": "Shift",
+        "alt": "Alt",
+        "cmd": "Win",
+        "page_up": "Page Up",
+        "page_down": "Page Down",
+        "esc": "Esc",
+        "enter": "Enter",
+        "space": "Space",
+        "down": "↓",
+        "up": "↑",
+        "left": "←",
+        "right": "→",
+        "home": "Home",
+        "end": "End",
+        "delete": "Delete",
+        "tab": "Tab",
+        "pause": "Pause",
+        "scroll_lock": "Scroll Lock",
+    }
+    result = []
+    for part in value.split("+"):
+        key = part.strip().strip("<>").lower()
+        result.append(names.get(key, key.upper()))
+    return " + ".join(result)
+
+
 def validate_hotkeys(settings, overrides=None):
     from pynput.keyboard import HotKey, Key
 
@@ -107,21 +154,50 @@ def validate_hotkeys(settings, overrides=None):
         Key.cmd_l: Key.cmd,
         Key.cmd_r: Key.cmd,
     }
-    blocked = [
-        frozenset(aliases.get(key, key) for key in HotKey.parse(combo))
-        for combo in blocked_combinations
-    ]
-    seen = set()
-    for name in Settings.model_fields:
-        if not name.startswith("hotkey_"):
-            continue
-        value = (overrides or {}).get(name, getattr(settings, name))
-        keys = frozenset(aliases.get(key, key) for key in HotKey.parse(value))
-        modifiers = {Key.alt, Key.ctrl, Key.shift, Key.cmd}
+
+    def parse(value):
+        try:
+            return frozenset(aliases.get(key, key) for key in HotKey.parse(value))
+        except (ValueError, TypeError):
+            raise HotkeyValidationError("Не удалось распознать клавишу.") from None
+
+    blocked = [parse(combo) for combo in blocked_combinations]
+    overrides = overrides or {}
+    parsed = {}
+    for name in HOTKEY_LABELS:
+        value = overrides.get(name, getattr(settings, name))
+        keys = parse(value)
         if any(combo <= keys for combo in blocked):
-            raise ValueError("Системное сочетание Windows недоступно для назначения.")
-        if not keys - modifiers or keys in seen:
-            raise ValueError(
-                "Хоткеи должны быть различными и включать обычную клавишу."
+            raise HotkeyValidationError(
+                f"Комбинация {format_hotkey(value)} зарезервирована Windows."
             )
-        seen.add(keys)
+        modifiers = {Key.alt, Key.ctrl, Key.shift, Key.cmd}
+        if not keys - modifiers:
+            raise HotkeyValidationError("Не удалось распознать клавишу.")
+        if name in overrides and not keys & modifiers:
+            key = value.strip().lower()
+            safe = key in {"<pause>", "<scroll_lock>"} or key in {
+                f"<f{i}>" for i in range(1, 13)
+            }
+            if not safe:
+                raise HotkeyValidationError(
+                    "Для этой комбинации необходим хотя бы один модификатор."
+                )
+        parsed[name] = keys
+
+    # Identify the conflicting existing action even when it follows the edited field.
+    for name in overrides:
+        for other, keys in parsed.items():
+            if other != name and parsed.get(name) == keys:
+                raise HotkeyValidationError(
+                    f"Комбинация {format_hotkey(overrides[name])} уже используется "
+                    f"для действия «{HOTKEY_LABELS[other]}»."
+                )
+    seen = {}
+    for name, keys in parsed.items():
+        if keys in seen:
+            raise HotkeyValidationError(
+                f"Комбинация {format_hotkey(getattr(settings, name))} уже используется "
+                f"для действия «{HOTKEY_LABELS[seen[keys]]}»."
+            )
+        seen[keys] = name

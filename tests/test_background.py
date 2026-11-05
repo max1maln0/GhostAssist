@@ -18,6 +18,7 @@ class BackgroundTests(unittest.TestCase):
         tray = SimpleNamespace(ready=ready, visible=True, icon=Mock())
         app = SimpleNamespace(
             tray=tray,
+            _end_hotkey_capture=Mock(),
             dashboard_visible=True,
             withdraw=Mock(),
             deiconify=Mock(),
@@ -64,6 +65,7 @@ class BackgroundTests(unittest.TestCase):
     def test_cannot_hide_before_tray_is_ready(self):
         app = SimpleNamespace(
             tray=SimpleNamespace(ready=threading.Event()),
+            _end_hotkey_capture=Mock(),
             withdraw=Mock(),
         )
         with patch("ui.dashboard.messagebox.showwarning") as warning:
@@ -84,21 +86,70 @@ class BackgroundTests(unittest.TestCase):
         self.assertTrue(app.exit_requested.is_set())
 
     def test_dashboard_preferences_do_not_restart_service(self):
+        initial = SimpleNamespace(hotkey_dashboard="<ctrl>+<shift>+<f9>")
+        updated = SimpleNamespace(hotkey_dashboard="<alt>+<home>")
+        listener = Mock()
         app = SimpleNamespace(
+            settings=initial,
             assistant_process=Mock(),
             restart_pending=False,
             _stop_process=Mock(),
-            _bind_dashboard_hotkey=Mock(),
+            _create_dashboard_hotkey=Mock(return_value=listener),
+            _replace_dashboard_hotkey=Mock(),
         )
         app.assistant_process.poll.return_value = None
-        with patch("ui.dashboard.Settings", return_value=Mock()):
-            with patch("ui.dashboard.update_env"):
+        with patch("ui.dashboard.Settings", side_effect=[initial, updated]):
+            with (
+                patch("ui.dashboard.update_env"),
+                patch("ui.dashboard.validate_hotkeys"),
+            ):
                 self.assertTrue(DashboardApp._save(app, CLOSE_TO_TRAY="false"))
                 self.assertTrue(
                     DashboardApp._save(app, HOTKEY_DASHBOARD="<alt>+<home>")
                 )
         app._stop_process.assert_not_called()
-        app._bind_dashboard_hotkey.assert_called_once()
+        app._replace_dashboard_hotkey.assert_called_once_with(listener)
+
+    def test_hotkey_registration_failure_does_not_save(self):
+        initial = SimpleNamespace(hotkey_dashboard="<ctrl>+<shift>+<f9>")
+        candidate = SimpleNamespace(hotkey_dashboard="<alt>+<home>")
+        app = SimpleNamespace(
+            settings=initial,
+            assistant_process=None,
+            _create_dashboard_hotkey=Mock(side_effect=OSError),
+        )
+        with patch("ui.dashboard.Settings", return_value=candidate):
+            with (
+                patch("ui.dashboard.validate_hotkeys"),
+                patch("ui.dashboard.update_env") as write,
+            ):
+                with patch("ui.dashboard.messagebox.showerror"):
+                    self.assertFalse(
+                        DashboardApp._save(app, HOTKEY_DASHBOARD="<alt>+<home>")
+                    )
+        write.assert_not_called()
+        self.assertIs(app.settings, initial)
+
+    def test_failed_write_stops_prepared_hotkey(self):
+        initial = SimpleNamespace(hotkey_dashboard="<ctrl>+<shift>+<f9>")
+        candidate = SimpleNamespace(hotkey_dashboard="<alt>+<home>")
+        listener = Mock()
+        app = SimpleNamespace(
+            settings=initial,
+            assistant_process=None,
+            _create_dashboard_hotkey=Mock(return_value=listener),
+        )
+        with patch("ui.dashboard.Settings", return_value=candidate):
+            with (
+                patch("ui.dashboard.validate_hotkeys"),
+                patch("ui.dashboard.update_env", side_effect=OSError),
+            ):
+                with patch("ui.dashboard.messagebox.showerror"):
+                    self.assertFalse(
+                        DashboardApp._save(app, HOTKEY_DASHBOARD="<alt>+<home>")
+                    )
+        listener.stop.assert_called_once()
+        self.assertIs(app.settings, initial)
 
     def test_hotkey_event_is_queued(self):
         from queue import Queue
@@ -139,7 +190,7 @@ class BackgroundTests(unittest.TestCase):
 
     def test_dashboard_hotkey_is_checked_for_conflicts(self):
         settings = Settings(_env_file=None)
-        self.assertEqual(settings.hotkey_dashboard, "<alt>+<home>")
+        self.assertEqual(settings.hotkey_dashboard, "<ctrl>+<shift>+<f9>")
         validate_hotkeys(settings)
         with self.assertRaises(ValueError):
             validate_hotkeys(settings, {"hotkey_dashboard": settings.hotkey_audio})

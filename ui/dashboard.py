@@ -1,6 +1,9 @@
+import ctypes
+import os
 import subprocess
 import sys
 import time
+from ctypes import wintypes
 from queue import Empty, Full, Queue
 from threading import Event, Thread
 from tkinter import messagebox
@@ -12,14 +15,18 @@ from pynput import keyboard
 from config.env_file import update_env
 from config.settings import (
     GEMINI_MODELS,
+    HOTKEY_LABELS,
     PROFILES,
     ROOT,
+    HotkeyValidationError,
     Settings,
+    format_hotkey,
     profile_path,
     validate_hotkeys,
 )
 from core.audio_worker import AudioError, list_loopback_devices
 from core.single_instance import SingleInstance
+from ui.hotkey_capture import HotkeyCapture, Tooltip
 from ui.tray import Tray
 
 # Фирменная тёмная палитра
@@ -39,6 +46,10 @@ class DashboardApp(ctk.CTk):
         self.tray_commands = Queue(maxsize=64)
         self.exit_requested = Event()
         self.capturing_hotkey = False
+        self.active_hotkey = None
+        self.hotkey_capture = None
+        self.hotkey_bindings = {}
+        self.hotkey_warning = False
         self.tray = Tray(self._enqueue_tray)
         self.dashboard_hotkey = None
         self.dashboard_visible = True
@@ -308,24 +319,8 @@ class DashboardApp(ctk.CTk):
         )
         hotkeys_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
-        hotkey_items = [
-            (
-                "HOTKEY_DASHBOARD",
-                "Показать / скрыть Dashboard",
-                self.settings.hotkey_dashboard,
-            ),
-            ("HOTKEY_SCREEN", "Фуллскрин скрин", self.settings.hotkey_screen),
-            ("HOTKEY_SNIP", "Снайпер (выделение)", self.settings.hotkey_snip),
-            ("HOTKEY_AUDIO", "Звук (Loopback)", self.settings.hotkey_audio),
-            ("HOTKEY_MODE", "TEST ↔ INTERVIEW", self.settings.hotkey_mode),
-            ("HOTKEY_HUD", "Скрыть / Показать HUD", self.settings.hotkey_hud),
-            ("HOTKEY_CANCEL", "Отменить задачу", self.settings.hotkey_cancel),
-            ("HOTKEY_PAGE_UP", "Прокрутка HUD вверх", self.settings.hotkey_page_up),
-            ("HOTKEY_PAGE_DOWN", "Прокрутка HUD вниз", self.settings.hotkey_page_down),
-            ("HOTKEY_DOCK", "Сместить (Верх / Низ)", self.settings.hotkey_dock),
-        ]
-
-        for env_key, label_text, default_val in hotkey_items:
+        for field, label_text in HOTKEY_LABELS.items():
+            env_key = field.upper()
             row = ctk.CTkFrame(hotkeys_scroll, fg_color="transparent")
             row.pack(fill="x", padx=8, pady=3)
 
@@ -333,17 +328,33 @@ class DashboardApp(ctk.CTk):
                 row, text=label_text, font=ctk.CTkFont(size=11), text_color="#94a3b8"
             ).pack(side="left")
 
-            btn = ctk.CTkButton(
+            reset = ctk.CTkButton(
                 row,
-                text=default_val,
-                font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
-                width=120,
+                text="↺",
+                font=ctk.CTkFont(size=15),
+                width=30,
                 height=26,
                 fg_color=SURFACE_INNER,
                 border_width=1,
                 border_color=BORDER_COLOR,
                 hover_color="#1e293b",
-                text_color=ACCENT_GREEN,
+                text_color="#94a3b8",
+                corner_radius=6,
+                command=lambda k=env_key: self._reset_hotkey(k),
+            )
+            reset.pack(side="right", padx=(6, 0))
+            reset.tooltip = Tooltip(reset, "Вернуть комбинацию по умолчанию")
+            btn = ctk.CTkButton(
+                row,
+                text=format_hotkey(getattr(self.settings, field)),
+                font=ctk.CTkFont(family="Consolas", size=10),
+                width=174,
+                height=26,
+                fg_color=SURFACE_INNER,
+                border_width=1,
+                border_color=BORDER_COLOR,
+                hover_color="#1e293b",
+                text_color="#94a3b8",
                 corner_radius=6,
                 command=lambda k=env_key: self._start_hotkey_capture(k),
             )
@@ -438,25 +449,36 @@ class DashboardApp(ctk.CTk):
         except Full:
             pass
 
+    def _create_dashboard_hotkey(self, settings):
+        validate_hotkeys(settings)
+        listener = keyboard.GlobalHotKeys(
+            {settings.hotkey_dashboard: lambda: self._enqueue_tray("toggle")}
+        )
+        listener.start()
+        return listener
+
+    def _replace_dashboard_hotkey(self, listener):
+        previous = self.dashboard_hotkey
+        self.dashboard_hotkey = listener
+        if previous:
+            previous.stop()
+            previous.join(timeout=1)
+
     def _bind_dashboard_hotkey(self):
-        if self.dashboard_hotkey:
-            self.dashboard_hotkey.stop()
-            self.dashboard_hotkey.join(timeout=1)
-            self.dashboard_hotkey = None
         try:
-            validate_hotkeys(self.settings)
-            self.dashboard_hotkey = keyboard.GlobalHotKeys(
-                {self.settings.hotkey_dashboard: lambda: self._enqueue_tray("toggle")}
-            )
-            self.dashboard_hotkey.start()
+            listener = self._create_dashboard_hotkey(self.settings)
         except (ValueError, OSError, RuntimeError):
             self.after_idle(
                 lambda: messagebox.showerror(
-                    "Хоткей", "Проверьте настройки глобальных сочетаний."
+                    "Хоткей", "Не удалось зарегистрировать сочетание Dashboard."
                 )
             )
+            return False
+        self._replace_dashboard_hotkey(listener)
+        return True
 
     def hide_dashboard(self):
+        self._end_hotkey_capture()
         if not self.tray.ready.is_set():
             messagebox.showwarning("Трей", "Значок ещё не готов. Повторите попытку.")
             return
@@ -478,52 +500,130 @@ class DashboardApp(ctk.CTk):
     def _on_close_changed(self):
         self._save(CLOSE_TO_TRAY=str(bool(self.close_switch.get())).lower())
 
-    def _start_hotkey_capture(self, env_key):
-        self.capturing_hotkey = True
-        button = self.hotkey_buttons[env_key]
-        button.focus_set()
-
-        def capture(event):
-            key = event.keysym.lower()
-            if key.startswith(("alt_", "control_", "shift_")):
-                return "break"
-            self.unbind("<KeyPress>")
-            self.capturing_hotkey = False
-            mods = [
-                name
-                for mask, name in ((1, "<shift>"), (4, "<ctrl>"), (0x20000, "<alt>"))
-                if event.state & mask
-            ]
-            special = {
-                "escape": "esc",
-                "return": "enter",
-                "prior": "page_up",
-                "next": "page_down",
-            }
-            key = special.get(key, key)
-            safe_single = key in {
-                "pause",
-                "scroll_lock",
-                *(f"f{i}" for i in range(1, 13)),
-            }
-            if not mods and not safe_single:
-                messagebox.showwarning(
-                    "Хоткей", "Добавьте модификатор или выберите F1–F12."
-                )
-                return "break"
-            combo = "+".join([*mods, key if len(key) == 1 else f"<{key}>"])
+    def _signal_hotkey_capture(self, active):
+        if self._service_running():
             try:
-                validate_hotkeys(self.settings, {env_key.lower(): combo})
-            except ValueError:
-                messagebox.showwarning(
-                    "Хоткей", "Комбинация системная, недоступна или уже назначена."
-                )
-                return "break"
-            if self._save(**{env_key: combo}):
-                button.configure(text=combo)
+                self.assistant_process.stdin.write(b"S" if active else b"R")
+                self.assistant_process.stdin.flush()
+            except (OSError, ValueError):
+                pass
+
+    def _end_hotkey_capture(self):
+        if self.active_hotkey is None:
+            return
+        button = self.hotkey_buttons[self.active_hotkey]
+        value = getattr(self.settings, self.active_hotkey.lower())
+        button.configure(
+            text=format_hotkey(value), border_color=BORDER_COLOR, text_color="#94a3b8"
+        )
+        for sequence, binding in self.hotkey_bindings.items():
+            self.unbind(sequence, binding)
+        self.hotkey_bindings.clear()
+        self.active_hotkey = None
+        self.hotkey_capture = None
+        self.capturing_hotkey = False
+        self._signal_hotkey_capture(False)
+
+    def _hotkey_focus_lost(self, event):
+        def check():
+            if not self.active_hotkey or self.hotkey_warning:
+                return
+            user32 = ctypes.windll.user32
+            user32.GetForegroundWindow.restype = wintypes.HWND
+            user32.GetWindowThreadProcessId.argtypes = (
+                wintypes.HWND,
+                ctypes.POINTER(wintypes.DWORD),
+            )
+            foreground = user32.GetForegroundWindow()
+            process_id = wintypes.DWORD()
+            if foreground:
+                user32.GetWindowThreadProcessId(foreground, ctypes.byref(process_id))
+                if process_id.value and process_id.value != os.getpid():
+                    self._end_hotkey_capture()
+
+        self.after(200, check)
+
+    def _hotkey_error(self, message):
+        self.hotkey_capture.reset()
+        self.hotkey_buttons[self.active_hotkey].configure(
+            text=self.hotkey_capture.display()
+        )
+        self.hotkey_warning = True
+        try:
+            messagebox.showwarning("Хоткей", message, parent=self)
+        finally:
+            self.hotkey_warning = False
+            if self.active_hotkey:
+                self.hotkey_buttons[self.active_hotkey].focus_set()
+
+    def _start_hotkey_capture(self, env_key):
+        if self.active_hotkey == env_key:
+            self._end_hotkey_capture()
+            return
+        self._end_hotkey_capture()
+        self.capturing_hotkey = True
+        self.active_hotkey = env_key
+        self.hotkey_capture = HotkeyCapture()
+        button = self.hotkey_buttons[env_key]
+        button.configure(
+            text=self.hotkey_capture.display(),
+            border_color=ACCENT_GREEN,
+            text_color=ACCENT_GREEN,
+        )
+        self._signal_hotkey_capture(True)
+
+        def on_press(event):
+            action, _ = self.hotkey_capture.press(event.keysym)
+            if action == "cancel":
+                self._end_hotkey_capture()
+            else:
+                button.configure(text=self.hotkey_capture.display())
             return "break"
 
-        self.bind("<KeyPress>", capture)
+        def on_release(event):
+            action, combo = self.hotkey_capture.release(event.keysym)
+            if action != "complete":
+                button.configure(text=self.hotkey_capture.display())
+                return "break"
+            try:
+                validate_hotkeys(self.settings, {env_key.lower(): combo})
+            except HotkeyValidationError as exc:
+                self._hotkey_error(str(exc))
+                return "break"
+            self.hotkey_warning = True
+            try:
+                saved = self._save(**{env_key: combo})
+            finally:
+                self.hotkey_warning = False
+            if saved:
+                self._end_hotkey_capture()
+            else:
+                self.hotkey_capture.reset()
+                button.configure(text=self.hotkey_capture.display())
+                button.focus_set()
+            return "break"
+
+        self.hotkey_bindings = {
+            "<KeyPress>": self.bind("<KeyPress>", on_press, add="+"),
+            "<KeyRelease>": self.bind("<KeyRelease>", on_release, add="+"),
+            "<FocusOut>": self.bind("<FocusOut>", self._hotkey_focus_lost, add="+"),
+        }
+        button.focus_set()
+
+    def _reset_hotkey(self, env_key):
+        field = env_key.lower()
+        value = Settings.model_fields[field].default
+        try:
+            validate_hotkeys(self.settings, {field: value})
+        except HotkeyValidationError as exc:
+            if self.active_hotkey:
+                self._hotkey_error(str(exc))
+            else:
+                messagebox.showwarning("Хоткей", str(exc), parent=self)
+            return
+        if self._save(**{env_key: value}):
+            self._end_hotkey_capture()
+            self.hotkey_buttons[env_key].configure(text=format_hotkey(value))
 
     def _load_profiles_list(self):
         PROFILES.mkdir(parents=True, exist_ok=True)
@@ -642,15 +742,46 @@ class DashboardApp(ctk.CTk):
         self._save(CROP_WIDTH=width, CROP_HEIGHT=height)
 
     def _save(self, **values):
+        prepared = None
         try:
-            Settings(**{key.lower(): value for key, value in values.items()})
+            for key, value in values.items():
+                if (
+                    key.startswith("HOTKEY_")
+                    and key in os.environ
+                    and os.environ[key] != value
+                ):
+                    raise ValueError("Хоткей задан переменной окружения.")
+            candidate = Settings(
+                **{key.lower(): value for key, value in values.items()}
+            )
+            hotkeys = {
+                key.lower(): value
+                for key, value in values.items()
+                if key.startswith("HOTKEY_")
+            }
+            if hotkeys:
+                validate_hotkeys(candidate, hotkeys)
+            if (
+                "HOTKEY_DASHBOARD" in values
+                and candidate.hotkey_dashboard != self.settings.hotkey_dashboard
+            ):
+                prepared = self._create_dashboard_hotkey(candidate)
             update_env(values)
-            self.settings = Settings()
-        except (ValueError, OSError):
-            messagebox.showerror("Настройки", "Проверьте файл .env и права на запись.")
+        except HotkeyValidationError as exc:
+            messagebox.showwarning("Хоткей", str(exc), parent=self)
             return False
-        if "HOTKEY_DASHBOARD" in values:
-            self._bind_dashboard_hotkey()
+        except (ValueError, OSError, RuntimeError):
+            if prepared is not None:
+                prepared.stop()
+                prepared.join(timeout=1)
+            messagebox.showerror(
+                "Настройки",
+                "Не удалось сохранить настройки или зарегистрировать хоткей.",
+            )
+            return False
+        self.settings = candidate
+        if prepared is not None:
+            self._replace_dashboard_hotkey(prepared)
         dashboard_only = {"HOTKEY_DASHBOARD", "CLOSE_TO_TRAY"}
         if not values.keys() <= dashboard_only:
             if self.assistant_process and self.assistant_process.poll() is None:
@@ -863,6 +994,7 @@ class DashboardApp(ctk.CTk):
             self.exit_app()
 
     def exit_app(self):
+        self._end_hotkey_capture()
         if not self._window_exists:
             self.after(30, self.exit_app)
             return

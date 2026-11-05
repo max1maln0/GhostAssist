@@ -49,6 +49,7 @@ class GhostAssistApp:
         self.listener_failed = False
         self.cancel_requested = Event()
         self.close_requested = Event()
+        self.hotkeys_suspended = Event()
         self.hud.root.protocol("WM_DELETE_WINDOW", self.close)
 
     def enqueue(self, action):
@@ -477,6 +478,10 @@ class GhostAssistApp:
                     break
                 if command == b"C":
                     self.enqueue(self.cancel)
+                elif command == b"S":
+                    self.hotkeys_suspended.set()
+                elif command == b"R":
+                    self.hotkeys_suspended.clear()
         except OSError:
             pass
         self.enqueue(self.close)
@@ -500,11 +505,15 @@ class GhostAssistApp:
             if pressed and button in (mouse.Button.x1, mouse.Button.x2):
                 self.enqueue(self.capture if button == mouse.Button.x1 else self.audio)
 
+        def dispatch_hotkey(action):
+            if not self.hotkeys_suspended.is_set():
+                self.enqueue(action)
+
         try:
             self.listeners = [
                 keyboard.GlobalHotKeys(
                     {
-                        key: lambda action=action: self.enqueue(action)
+                        key: lambda action=action: dispatch_hotkey(action)
                         for key, action in bindings.items()
                     }
                 ),
