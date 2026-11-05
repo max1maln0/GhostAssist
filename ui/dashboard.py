@@ -2,11 +2,12 @@ import subprocess
 import sys
 import time
 from queue import Empty, Full, Queue
-from threading import Thread
+from threading import Event, Thread
 from tkinter import messagebox
 
 import customtkinter as ctk
 from pydantic import ValidationError
+from pynput import keyboard
 
 from config.env_file import update_env
 from config.settings import (
@@ -18,6 +19,8 @@ from config.settings import (
     validate_hotkeys,
 )
 from core.audio_worker import AudioError, list_loopback_devices
+from core.single_instance import SingleInstance
+from ui.tray import Tray
 
 # Фирменная тёмная палитра
 BG_DARK = "#030712"  # Глубокий обсидиан
@@ -30,8 +33,15 @@ BORDER_COLOR = "#1e293b"  # Тонкие разделители
 
 
 class DashboardApp(ctk.CTk):
-    def __init__(self):
+    def __init__(self, instance=None):
         super().__init__()
+        self.instance = instance
+        self.tray_commands = Queue(maxsize=64)
+        self.exit_requested = Event()
+        self.capturing_hotkey = False
+        self.tray = Tray(self._enqueue_tray)
+        self.dashboard_hotkey = None
+        self.dashboard_visible = True
 
         self.title("GhostAssist // Control Center")
         self.geometry("1040x740")
@@ -41,6 +51,7 @@ class DashboardApp(ctk.CTk):
         ctk.set_appearance_mode("dark")
 
         self.assistant_process = None
+        self.external_service = False
         self.session_updates = Queue(maxsize=32)
         self.device_updates = Queue(maxsize=1)
         self.device_refreshing = False
@@ -61,6 +72,8 @@ class DashboardApp(ctk.CTk):
         self._setup_layout()
         self._load_profiles_list()
         self._refresh_devices()
+        self.tray.start()
+        self._bind_dashboard_hotkey()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.after(150, self._poll_process)
 
@@ -124,7 +137,31 @@ class DashboardApp(ctk.CTk):
             corner_radius=8,
             command=self.toggle_assistant_process,
         )
-        self.run_btn.pack(fill="x", padx=16, pady=(0, 12))
+        self.run_btn.pack(fill="x", padx=16, pady=(0, 4))
+        window_actions = ctk.CTkFrame(service_card, fg_color="transparent")
+        window_actions.pack(fill="x", padx=16, pady=(0, 4))
+        ctk.CTkButton(
+            window_actions,
+            text="Скрыть в трей",
+            command=self.hide_dashboard,
+            fg_color=SURFACE_INNER,
+            border_width=1,
+            border_color=BORDER_COLOR,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(
+            window_actions,
+            text="Завершить GhostAssist",
+            command=self.exit_app,
+            fg_color=SURFACE_INNER,
+            border_width=1,
+            border_color=BORDER_COLOR,
+        ).pack(side="left", fill="x", expand=True)
+        self.close_switch = ctk.CTkSwitch(
+            service_card, text="Закрывать в трей", command=self._on_close_changed
+        )
+        self.close_switch.pack(anchor="w", padx=16, pady=(0, 10))
+        if self.settings.close_to_tray:
+            self.close_switch.select()
 
         # Карточка 2: Параметры инференса и снимков
         config_card = ctk.CTkFrame(
@@ -272,6 +309,11 @@ class DashboardApp(ctk.CTk):
         hotkeys_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
         hotkey_items = [
+            (
+                "HOTKEY_DASHBOARD",
+                "Показать / скрыть Dashboard",
+                self.settings.hotkey_dashboard,
+            ),
             ("HOTKEY_SCREEN", "Фуллскрин скрин", self.settings.hotkey_screen),
             ("HOTKEY_SNIP", "Снайпер (выделение)", self.settings.hotkey_snip),
             ("HOTKEY_AUDIO", "Звук (Loopback)", self.settings.hotkey_audio),
@@ -385,7 +427,59 @@ class DashboardApp(ctk.CTk):
         )
         self.legend_textbox.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
+    def _enqueue_tray(self, command):
+        if command == "exit":
+            self.exit_requested.set()
+            return
+        if command == "toggle" and self.capturing_hotkey:
+            return
+        try:
+            self.tray_commands.put_nowait(command)
+        except Full:
+            pass
+
+    def _bind_dashboard_hotkey(self):
+        if self.dashboard_hotkey:
+            self.dashboard_hotkey.stop()
+            self.dashboard_hotkey.join(timeout=1)
+            self.dashboard_hotkey = None
+        try:
+            validate_hotkeys(self.settings)
+            self.dashboard_hotkey = keyboard.GlobalHotKeys(
+                {self.settings.hotkey_dashboard: lambda: self._enqueue_tray("toggle")}
+            )
+            self.dashboard_hotkey.start()
+        except (ValueError, OSError, RuntimeError):
+            self.after_idle(
+                lambda: messagebox.showerror(
+                    "Хоткей", "Проверьте настройки глобальных сочетаний."
+                )
+            )
+
+    def hide_dashboard(self):
+        if not self.tray.ready.is_set():
+            messagebox.showwarning("Трей", "Значок ещё не готов. Повторите попытку.")
+            return
+        self.withdraw()
+        self.dashboard_visible = False
+        self.tray.visible = False
+        if self.tray.ready.is_set():
+            self.tray.icon.update_menu()
+
+    def show_dashboard(self):
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        self.dashboard_visible = True
+        self.tray.visible = True
+        if self.tray.ready.is_set():
+            self.tray.icon.update_menu()
+
+    def _on_close_changed(self):
+        self._save(CLOSE_TO_TRAY=str(bool(self.close_switch.get())).lower())
+
     def _start_hotkey_capture(self, env_key):
+        self.capturing_hotkey = True
         button = self.hotkey_buttons[env_key]
         button.focus_set()
 
@@ -394,6 +488,7 @@ class DashboardApp(ctk.CTk):
             if key.startswith(("alt_", "control_", "shift_")):
                 return "break"
             self.unbind("<KeyPress>")
+            self.capturing_hotkey = False
             mods = [
                 name
                 for mask, name in ((1, "<shift>"), (4, "<ctrl>"), (0x20000, "<alt>"))
@@ -554,9 +649,13 @@ class DashboardApp(ctk.CTk):
         except (ValueError, OSError):
             messagebox.showerror("Настройки", "Проверьте файл .env и права на запись.")
             return False
-        if self.assistant_process and self.assistant_process.poll() is None:
-            self.restart_pending = True
-            self._stop_process()
+        if "HOTKEY_DASHBOARD" in values:
+            self._bind_dashboard_hotkey()
+        dashboard_only = {"HOTKEY_DASHBOARD", "CLOSE_TO_TRAY"}
+        if not values.keys() <= dashboard_only:
+            if self.assistant_process and self.assistant_process.poll() is None:
+                self.restart_pending = True
+                self._stop_process()
         return True
 
     def _show_status(self, text, active=False):
@@ -580,6 +679,12 @@ class DashboardApp(ctk.CTk):
             self._stop_process()
             return
         try:
+            if SingleInstance.exists("service"):
+                messagebox.showinfo(
+                    "Служба",
+                    "Служба уже запущена отдельно. Завершите её перед запуском из Dashboard.",
+                )
+                return
             self.settings = Settings()
             validate_hotkeys(self.settings)
         except ValueError:
@@ -637,6 +742,44 @@ class DashboardApp(ctk.CTk):
                 pass
 
     def _poll_process(self):
+        if self.exit_requested.is_set() and not self.closing:
+            self.exit_app()
+            if self.assistant_process is None:
+                return
+        if self.instance and self.instance.activated() and not self.closing:
+            self.show_dashboard()
+        for _ in range(64):
+            try:
+                command = self.tray_commands.get_nowait()
+            except Empty:
+                break
+            if self.closing:
+                continue
+            if command == "show":
+                self.show_dashboard()
+            elif command == "hide":
+                self.hide_dashboard()
+            elif command == "toggle":
+                (
+                    self.hide_dashboard
+                    if self.dashboard_visible
+                    else self.show_dashboard
+                )()
+            elif command == "start" and not self._service_running():
+                self.toggle_assistant_process()
+            elif command == "stop" and self._service_running():
+                self.restart_pending = False
+                self._stop_process()
+            elif command == "cancel" and self._service_running():
+                try:
+                    self.assistant_process.stdin.write(b"C")
+                    self.assistant_process.stdin.flush()
+                except (OSError, ValueError):
+                    pass
+            elif command == "exit":
+                self.exit_app()
+                if self.assistant_process is None:
+                    return
         try:
             devices, error = self.device_updates.get_nowait()
         except Empty:
@@ -683,19 +826,77 @@ class DashboardApp(ctk.CTk):
                         self.status_text.configure(
                             text="● НЕ УДАЛОСЬ ОСТАНОВИТЬ СЛУЖБУ"
                         )
+        running = self._service_running()
+        try:
+            external = not running and SingleInstance.exists("service")
+        except OSError:
+            external = False
+        changed = (
+            self.tray.running != running or self.tray.externally_running != external
+        )
+        if self.external_service != external:
+            self.external_service = external
+            if self.assistant_process is None and not self.closing:
+                self._show_status(
+                    "СЛУЖБА ЗАПУЩЕНА ОТДЕЛЬНО" if external else "СЛУЖБА ОСТАНОВЛЕНА"
+                )
+        if changed:
+            self.tray.running = running
+            self.tray.externally_running = external
+            if self.tray.ready.is_set():
+                self.tray.icon.update_menu()
         if self.closing and self.assistant_process is None:
-            self.destroy()
+            self._finish_exit()
         else:
             self.after(150, self._poll_process)
 
+    def _service_running(self):
+        return bool(self.assistant_process and self.assistant_process.poll() is None)
+
     def on_closing(self):
+        if not self._window_exists:
+            self.after(30, self.on_closing)
+            return
+        if self.settings.close_to_tray:
+            self.hide_dashboard()
+        else:
+            self.exit_app()
+
+    def exit_app(self):
+        if not self._window_exists:
+            self.after(30, self.exit_app)
+            return
+        if self.closing:
+            return
         self.closing = True
+        self.tray.closing = True
         self.restart_pending = False
         if self.assistant_process:
             self._stop_process()
         else:
-            self.destroy()
+            self._finish_exit()
+
+    def _finish_exit(self):
+        if self.dashboard_hotkey:
+            self.dashboard_hotkey.stop()
+            self.dashboard_hotkey = None
+        self.tray.stop()
+        self.destroy()
+
+
+def main():
+    instance = SingleInstance("dashboard")
+    if not instance.primary:
+        try:
+            instance.activate()
+        finally:
+            instance.close()
+        return
+    try:
+        DashboardApp(instance).mainloop()
+    finally:
+        instance.close()
 
 
 if __name__ == "__main__":
-    DashboardApp().mainloop()
+    main()

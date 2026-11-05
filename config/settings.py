@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     vad_sensitivity: int = Field(2, ge=0, le=3)
     memory_enabled: bool = True
     memory_depth: int = Field(6, ge=1, le=10)
+    close_to_tray: bool = True
+    hotkey_dashboard: str = "<alt>+<home>"
     hotkey_screen: str = "<alt>+q"
     hotkey_snip: str = "<alt>+s"
     hotkey_audio: str = "<alt>+r"

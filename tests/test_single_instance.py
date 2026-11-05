@@ -9,6 +9,7 @@ class SingleInstanceTests(unittest.TestCase):
         role = uuid4().hex
         first = SingleInstance(role)
         self.assertTrue(first.primary)
+        self.assertTrue(SingleInstance.exists(role))
         second = SingleInstance(role)
         self.assertFalse(second.primary)
         second.activate()
@@ -16,6 +17,7 @@ class SingleInstanceTests(unittest.TestCase):
         self.assertFalse(first.activated())
         second.close()
         first.close()
+        self.assertFalse(SingleInstance.exists(role))
         replacement = SingleInstance(role)
         try:
             self.assertTrue(replacement.primary)

@@ -9,3 +9,4 @@ pynput>=1.7.6
 PyAudioWPatch>=0.2.12.9,<0.3
 customtkinter>=5.2.2,<6
 webrtcvad-wheels>=2.0.14,<2.1
+pystray>=0.19.5,<0.20

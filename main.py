@@ -504,7 +504,12 @@ class GhostAssistApp:
 
                 def watch_parent():
                     try:
-                        os.read(sys.stdin.fileno(), 1)
+                        while True:
+                            command = os.read(sys.stdin.fileno(), 1)
+                            if not command:
+                                break
+                            if command == b"C":
+                                self.enqueue(self.cancel)
                     except OSError:
                         pass
                     self.enqueue(self.close)

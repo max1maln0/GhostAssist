@@ -6,7 +6,30 @@ import hashlib
 from ctypes import wintypes
 
 
+def _prefix(role):
+    user = hashlib.sha256(getpass.getuser().casefold().encode()).hexdigest()[:16]
+    return f"Local\\GhostAssist-{user}-{role}"
+
+
 class SingleInstance:
+    @staticmethod
+    def exists(role):
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenMutexW.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR)
+        kernel.OpenMutexW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel.CloseHandle.restype = wintypes.BOOL
+        handle = kernel.OpenMutexW(0x00100000, False, _prefix(role) + "-instance")
+        if handle:
+            kernel.CloseHandle(handle)
+            return True
+        error = ctypes.get_last_error()
+        if error == 2:
+            return False
+        if error == 5:
+            return True
+        raise ctypes.WinError(error)
+
     def __init__(self, role):
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         self.kernel = kernel
@@ -29,8 +52,7 @@ class SingleInstance:
         kernel.WaitForSingleObject.restype = wintypes.DWORD
         kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
         kernel.CloseHandle.restype = wintypes.BOOL
-        user = hashlib.sha256(getpass.getuser().casefold().encode()).hexdigest()[:16]
-        prefix = f"Local\\GhostAssist-{user}-{role}"
+        prefix = _prefix(role)
         self.event = kernel.CreateEventW(None, False, False, prefix + "-activate")
         if not self.event:
             raise ctypes.WinError(ctypes.get_last_error())
