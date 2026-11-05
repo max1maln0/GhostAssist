@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     audio_max_mib: int = Field(12, ge=1, le=12)
     audio_device: str = ""
     vad_enabled: bool = False
+    auto_send_transcript: bool = False
     vad_min_speech_ms: int = Field(300, ge=30, le=3000)
     vad_silence_ms: int = Field(900, ge=100, le=5000)
     vad_max_seconds: int = Field(30, ge=1, le=60)

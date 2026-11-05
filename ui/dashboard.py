@@ -201,6 +201,15 @@ class DashboardApp(ctk.CTk):
         if self.settings.vad_enabled:
             self.vad_switch.select()
 
+        self.auto_send_switch = ctk.CTkSwitch(
+            config_card,
+            text="Автоматически отправлять распознанное",
+            command=self._on_auto_send_changed,
+        )
+        self.auto_send_switch.pack(anchor="w", padx=16, pady=4)
+        if self.settings.auto_send_transcript:
+            self.auto_send_switch.select()
+
         session_row = ctk.CTkFrame(config_card, fg_color="transparent")
         session_row.pack(fill="x", padx=16, pady=(0, 6))
         self.memory_switch = ctk.CTkSwitch(
@@ -484,6 +493,9 @@ class DashboardApp(ctk.CTk):
             self.api_entry.delete(0, "end")
             if not self.assistant_process:
                 self._show_status("КЛЮЧ СОХРАНЁН")
+
+    def _on_auto_send_changed(self):
+        self._save(AUTO_SEND_TRANSCRIPT=str(bool(self.auto_send_switch.get())).lower())
 
     def _on_vad_changed(self):
         self._save(VAD_ENABLED=str(bool(self.vad_switch.get())).lower())

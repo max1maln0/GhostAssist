@@ -42,6 +42,8 @@ class VoiceSegmenter:
                     self.active = True
                     self.frames.extend(self.recent)
                     self.recent.clear()
+                    if len(self.frames) >= self.max_frames:
+                        self.done = True
                 continue
             self.frames.append(frame)
             self.silent = 0 if voiced else self.silent + 1

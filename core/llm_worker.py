@@ -1,5 +1,7 @@
 import asyncio
 import io
+import sys
+import time
 import wave
 from contextlib import aclosing
 
@@ -55,6 +57,7 @@ class LLMWorker:
             async with client.aio as api:
                 last = "Модель не вернула ответ."
                 for index, model in enumerate(self.models):
+                    print(f"[metrics] api_attempt={index + 1}", file=sys.stderr)
                     if index:
                         publish("")
                         await asyncio.sleep(0.4 * 2 ** (index - 1))
@@ -144,6 +147,7 @@ class LLMWorker:
                 ],
             )
         )
+        started = time.monotonic()
         stream = await api.models.generate_content_stream(
             model=model,
             contents=contents,
@@ -163,6 +167,11 @@ class LLMWorker:
                 if chunk.candidates and chunk.candidates[0].finish_reason:
                     finish = chunk.candidates[0].finish_reason
                 if chunk.text:
+                    if not answer:
+                        print(
+                            f"[metrics] first_token_ms={(time.monotonic() - started) * 1000:.0f}",
+                            file=sys.stderr,
+                        )
                     answer += chunk.text
                     publish(answer)
         if not answer.strip():

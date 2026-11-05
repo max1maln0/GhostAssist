@@ -28,6 +28,8 @@ class GhostAssistApp:
         self.tasks = TaskState()
         self.sessions = SessionManager(depth=settings.memory_depth)
         self.session_task = None
+        self.session_question = None
+        self.monitoring = False
         self.managed = False
         self.commands = Queue(maxsize=32)
         self.worker = ThreadPoolExecutor(max_workers=1)
@@ -87,6 +89,7 @@ class GhostAssistApp:
             return
         task = self.tasks.begin(State.RECORDING)
         if task:
+            self.monitoring = self.settings.vad_enabled
             self.submit(task, audio=True)
 
     def submit(self, task, bbox=None, audio=False):
@@ -96,6 +99,7 @@ class GhostAssistApp:
         if not self.settings.memory_enabled:
             history = ()
         self.session_task = (task, mode, generation)
+        self.session_question = None
         status = (
             "VAD · ЗАПИСЬ"
             if audio and self.settings.vad_enabled
@@ -127,7 +131,18 @@ class GhostAssistApp:
                 return None
             task.stop.set()
             if audio:
-                return ("transcript", self.llm.transcribe(data, task.cancel))
+                print(f"[metrics] audio_bytes={len(data)}", file=sys.stderr)
+                transcription_start = monotonic()
+                transcript = self.llm.transcribe(data, task.cancel)
+                print(
+                    f"[metrics] transcription_ms={(monotonic() - transcription_start) * 1000:.0f}",
+                    file=sys.stderr,
+                )
+                return ("transcript", transcript)
+            print(
+                f"[metrics] context_chars={sum(len(item.question) + len(item.answer) for item in history)}",
+                file=sys.stderr,
+            )
             return self.llm.generate(
                 data,
                 "audio/wav" if audio else "image/jpeg",
@@ -167,6 +182,7 @@ class GhostAssistApp:
                 return
             self.review.destroy()
             self.review = None
+            self.session_question = question
             task.state = State.PROCESSING
             _, mode, generation = self.session_task
             current_generation, history = self.sessions.snapshot(mode)
@@ -195,8 +211,11 @@ class GhostAssistApp:
             side="left", padx=5
         )
         self.review.protocol("WM_DELETE_WINDOW", self.cancel)
+        if self.settings.auto_send_transcript:
+            self.review.after(0, submit)
 
     def cancel(self):
+        self.monitoring = False
         task = self.tasks.active
         if not task:
             return
@@ -262,7 +281,8 @@ class GhostAssistApp:
                             if separator and question.strip().startswith("Вопрос:"):
                                 self.sessions.add(
                                     mode,
-                                    question.removeprefix("Вопрос:"),
+                                    self.session_question
+                                    or question.removeprefix("Вопрос:"),
                                     answer,
                                     generation,
                                     task.cancel,
@@ -277,10 +297,14 @@ class GhostAssistApp:
                                 flush=True,
                             )
                         self.hud.update_text(result, f"[{self.context.mode}] ГОТОВО")
+                        if self.monitoring and not self.closing:
+                            self.hud.root.after(0, self.audio)
                 except (AudioError, GenerationError) as exc:
+                    self.monitoring = False
                     if not task.cancel.is_set():
                         self.hud.update_text(str(exc), "ОШИБКА")
                 except Exception:  # noqa: BLE001 - isolate the application boundary
+                    self.monitoring = False
                     if self.review:
                         self.review.destroy()
                         self.review = None
