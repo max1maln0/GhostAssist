@@ -10,8 +10,24 @@ class AudioError(RuntimeError):
     pass
 
 
+def list_loopback_devices():
+    import pyaudiowpatch as audio
+
+    try:
+        with audio.PyAudio() as backend:
+            return [
+                item["name"] for item in backend.get_loopback_device_info_generator()
+            ]
+    except (OSError, RuntimeError, ValueError, KeyError):
+        raise AudioError("Не удалось получить список устройств WASAPI.") from None
+
+
 def record_wav(
-    stop: threading.Event, cancel: threading.Event, seconds: float, max_bytes: int
+    stop: threading.Event,
+    cancel: threading.Event,
+    seconds: float,
+    max_bytes: int,
+    device_name: str = "",
 ) -> bytes:
     import pyaudiowpatch as audio
 
@@ -20,7 +36,19 @@ def record_wav(
     complete = threading.Event()
     try:
         with audio.PyAudio() as backend:
-            device = backend.get_default_wasapi_loopback()
+            if device_name:
+                devices = [
+                    item
+                    for item in backend.get_loopback_device_info_generator()
+                    if item["name"] == device_name
+                ]
+                if len(devices) != 1:
+                    raise AudioError(
+                        "Выбранное устройство недоступно или неоднозначно."
+                    )
+                device = devices[0]
+            else:
+                device = backend.get_default_wasapi_loopback()
             channels = int(device["maxInputChannels"])
             rate = int(device["defaultSampleRate"])
             if channels < 1 or rate < 1:

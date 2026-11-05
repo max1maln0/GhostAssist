@@ -106,6 +106,7 @@ class GhostAssistApp:
                     task.cancel,
                     self.settings.audio_max_seconds,
                     self.settings.audio_max_mib * 1024 * 1024,
+                    self.settings.audio_device,
                 )
             else:
                 data = self.llm.capture_screen(bbox)

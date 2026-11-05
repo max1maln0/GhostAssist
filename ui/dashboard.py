@@ -17,6 +17,7 @@ from config.settings import (
     profile_path,
     validate_hotkeys,
 )
+from core.audio_worker import AudioError, list_loopback_devices
 
 # Фирменная тёмная палитра
 BG_DARK = "#030712"  # Глубокий обсидиан
@@ -175,6 +176,23 @@ class DashboardApp(ctk.CTk):
         )
         self.res_combo.set(f"{self.settings.crop_width}x{self.settings.crop_height}")
         self.res_combo.pack(fill="x", padx=16, pady=(2, 12))
+
+        ctk.CTkLabel(config_card, text="Устройство системного звука").pack(
+            anchor="w", padx=16
+        )
+        try:
+            devices = list_loopback_devices()
+        except AudioError:
+            devices = []
+        self.audio_devices = ["По умолчанию", *devices]
+        self.device_combo = ctk.CTkComboBox(
+            config_card,
+            values=self.audio_devices,
+            state="readonly",
+            command=self._on_device_changed,
+        )
+        self.device_combo.set(self.settings.audio_device or "По умолчанию")
+        self.device_combo.pack(fill="x", padx=16, pady=(2, 6))
 
         session_row = ctk.CTkFrame(config_card, fg_color="transparent")
         session_row.pack(fill="x", padx=16, pady=(0, 6))
@@ -459,6 +477,9 @@ class DashboardApp(ctk.CTk):
             self.api_entry.delete(0, "end")
             if not self.assistant_process:
                 self._show_status("КЛЮЧ СОХРАНЁН")
+
+    def _on_device_changed(self, value):
+        self._save(AUDIO_DEVICE="" if value == "По умолчанию" else value)
 
     def _on_memory_changed(self):
         self._save(MEMORY_ENABLED=str(bool(self.memory_switch.get())).lower())

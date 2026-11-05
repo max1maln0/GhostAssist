@@ -114,6 +114,28 @@ class AudioTests(unittest.TestCase):
             self.capture(fail=True)
         self.assertTrue(self.backend.terminated)
 
+    def test_device_selection_and_missing_device(self):
+        stop = threading.Event()
+        backend = FakeAudio(b"abcd", stop)
+        backend.get_loopback_device_info_generator = lambda: iter(
+            [
+                {
+                    "name": "Headset",
+                    "index": 4,
+                    "maxInputChannels": 2,
+                    "defaultSampleRate": 48000,
+                }
+            ]
+        )
+        module = SimpleNamespace(
+            PyAudio=lambda: backend, paInt16=8, paComplete=1, paContinue=0
+        )
+        with patch.dict(sys.modules, pyaudiowpatch=module):
+            self.assertTrue(record_wav(stop, threading.Event(), 1, 100, "Headset"))
+            stop.clear()
+            with self.assertRaisesRegex(AudioError, "устройство"):
+                record_wav(stop, threading.Event(), 1, 100, "Missing")
+
     def test_disconnect(self):
         with self.assertRaisesRegex(AudioError, "отключилось"):
             self.capture(b"abcd", disconnect=True)

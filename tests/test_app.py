@@ -16,7 +16,7 @@ class AppTests(unittest.TestCase):
     def test_audio_toggle_blocks_screen_and_updates_hud(self):
         entered = threading.Event()
 
-        def record(stop, cancel, seconds, max_bytes):
+        def record(stop, cancel, seconds, max_bytes, device_name):
             entered.set()
             if not stop.wait(2):
                 raise TimeoutError
