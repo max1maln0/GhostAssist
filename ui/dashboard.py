@@ -108,7 +108,7 @@ class DashboardApp(ctk.CTk):
 
         self.run_btn = ctk.CTkButton(
             service_card,
-            text="АКТИВИРОВАТЬ ПЕРЕХВАТ",
+            text="ЗАПУСТИТЬ СЛУЖБУ",
             font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
             fg_color=ACCENT_GREEN,
             hover_color=ACCENT_HOVER,
@@ -149,6 +149,7 @@ class DashboardApp(ctk.CTk):
         self.model_combo = ctk.CTkComboBox(
             config_card,
             values=list(GEMINI_MODELS),
+            state="readonly",
             fg_color=SURFACE_INNER,
             border_color=BORDER_COLOR,
             button_color=BORDER_COLOR,
@@ -162,18 +163,14 @@ class DashboardApp(ctk.CTk):
         ).pack(anchor="w", padx=16)
         self.res_combo = ctk.CTkComboBox(
             config_card,
-            values=["1280x720 (Быстро, ~45 КБ)", "1920x1080 (Четко, ~90 КБ)"],
+            values=["1280x720", "1920x1080"],
+            state="readonly",
             fg_color=SURFACE_INNER,
             border_color=BORDER_COLOR,
             button_color=BORDER_COLOR,
             command=self._on_resolution_changed,
         )
-        current_res = f"{self.settings.crop_width}x{self.settings.crop_height}"
-        self.res_combo.set(
-            "1280x720 (Быстро, ~45 КБ)"
-            if "1280" in current_res
-            else "1920x1080 (Четко, ~90 КБ)"
-        )
+        self.res_combo.set(f"{self.settings.crop_width}x{self.settings.crop_height}")
         self.res_combo.pack(fill="x", padx=16, pady=(2, 12))
 
         # Карточка 3: Горячие клавиши
