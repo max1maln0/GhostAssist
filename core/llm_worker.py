@@ -46,6 +46,7 @@ class LLMWorker:
             retry_options=types.HttpRetryOptions(attempts=1),
         )
         client = genai.Client(
+            vertexai=False,
             api_key=self.settings.gemini_api_key.get_secret_value().strip(),
             http_options=options,
         )

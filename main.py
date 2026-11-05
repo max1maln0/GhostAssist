@@ -29,6 +29,7 @@ class GhostAssistApp:
         self.overlay = None
         self.closing = False
         self.listeners = []
+        self.listener_failed = False
         self.cancel_requested = Event()
         self.close_requested = Event()
         self.hud.root.protocol("WM_DELETE_WINDOW", self.close)
@@ -129,6 +130,11 @@ class GhostAssistApp:
             self.hud.update_text(f"Режим {mode}", f"[{mode}] ГОТОВО")
 
     def poll(self):
+        if not self.closing and any(
+            not listener.is_alive() for listener in self.listeners
+        ):
+            self.listener_failed = True
+            self.close()
         if self.close_requested.is_set():
             self.close()
         if self.cancel_requested.is_set():
@@ -225,6 +231,8 @@ class GhostAssistApp:
                 Thread(target=watch_parent, daemon=True).start()
             self.hud.root.after(25, self.poll)
             self.hud.run()
+            if self.listener_failed:
+                raise RuntimeError("Global input listener stopped unexpectedly")
         finally:
             self.close()
             self.worker.shutdown(wait=True)

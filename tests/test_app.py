@@ -75,3 +75,27 @@ class AppTests(unittest.TestCase):
         self.app.hud.update_text.assert_called_with(
             "Не удалось открыть окно выделения.", "ОШИБКА"
         )
+
+    def test_shutdown_waits_for_worker_cleanup(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def generate(data, mime_type, prompt, publish, cancel, **kwargs):
+            entered.set()
+            if not cancel.wait(2) or not release.wait(2):
+                raise TimeoutError
+            return None
+
+        with patch.object(self.app.llm, "capture_screen", return_value=b"jpg"):
+            with patch.object(self.app.llm, "generate", side_effect=generate):
+                self.app.capture()
+                self.assertTrue(entered.wait(2))
+                future = self.app.future
+                self.app.enqueue(self.app.close)
+                self.app.poll()
+                self.assertIs(self.app.tasks.state, State.CANCELLING)
+                self.app.hud.root.destroy.assert_not_called()
+                release.set()
+                future.result(timeout=2)
+                self.app.poll()
+                self.app.hud.root.destroy.assert_called_once()
