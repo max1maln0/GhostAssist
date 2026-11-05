@@ -1,6 +1,8 @@
 import subprocess
 import sys
 import time
+from queue import Empty, Full, Queue
+from threading import Thread
 from tkinter import messagebox
 
 import customtkinter as ctk
@@ -38,6 +40,7 @@ class DashboardApp(ctk.CTk):
         ctk.set_appearance_mode("dark")
 
         self.assistant_process = None
+        self.session_updates = Queue(maxsize=32)
         self.stopping_until = None
         self.restart_pending = False
         self.closing = False
@@ -172,6 +175,34 @@ class DashboardApp(ctk.CTk):
         )
         self.res_combo.set(f"{self.settings.crop_width}x{self.settings.crop_height}")
         self.res_combo.pack(fill="x", padx=16, pady=(2, 12))
+
+        session_row = ctk.CTkFrame(config_card, fg_color="transparent")
+        session_row.pack(fill="x", padx=16, pady=(0, 6))
+        self.memory_switch = ctk.CTkSwitch(
+            session_row, text="Память", command=self._on_memory_changed
+        )
+        self.memory_switch.pack(side="left")
+        if self.settings.memory_enabled:
+            self.memory_switch.select()
+        self.depth_combo = ctk.CTkComboBox(
+            session_row,
+            values=[str(n) for n in range(1, 11)],
+            width=65,
+            state="readonly",
+            command=self._on_depth_changed,
+        )
+        self.depth_combo.set(str(self.settings.memory_depth))
+        self.depth_combo.pack(side="left", padx=6)
+        ctk.CTkButton(
+            session_row,
+            text="Очистить сессию",
+            width=130,
+            command=self._reset_session,
+        ).pack(side="left", padx=6)
+        self.session_status = ctk.CTkLabel(
+            config_card, text="Сессия  TEST 0 · INTERVIEW 0"
+        )
+        self.session_status.pack(anchor="w", padx=16)
 
         # Карточка 3: Горячие клавиши
         hotkeys_card = ctk.CTkFrame(
@@ -429,6 +460,19 @@ class DashboardApp(ctk.CTk):
             if not self.assistant_process:
                 self._show_status("КЛЮЧ СОХРАНЁН")
 
+    def _on_memory_changed(self):
+        self._save(MEMORY_ENABLED=str(bool(self.memory_switch.get())).lower())
+
+    def _on_depth_changed(self, value):
+        self._save(MEMORY_DEPTH=value)
+
+    def _reset_session(self):
+        if self.assistant_process and self.assistant_process.poll() is None:
+            self.restart_pending = True
+            self._stop_process()
+        else:
+            self.session_status.configure(text="Сессия  TEST 0 · INTERVIEW 0")
+
     def _on_model_changed(self, model):
         self._save(GEMINI_MODEL=model)
 
@@ -482,13 +526,37 @@ class DashboardApp(ctk.CTk):
             return
         try:
             self.assistant_process = subprocess.Popen(
-                [sys.executable, str(ROOT / "main.py"), "--managed"],
+                [sys.executable, "-u", str(ROOT / "main.py"), "--managed"],
                 cwd=ROOT,
                 stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
             )
         except OSError:
             self._show_status("НЕ УДАЛОСЬ ЗАПУСТИТЬ СЛУЖБУ")
             return
+        process = self.assistant_process
+        self.session_status.configure(text="Сессия  TEST 0 · INTERVIEW 0")
+
+        def read_status():
+            for raw in process.stdout:
+                line = raw.decode("utf-8", errors="replace").strip().split()
+                if (
+                    len(line) == 3
+                    and line[0] == "GHOST_SESSION"
+                    and all(count.isdecimal() for count in line[1:])
+                ):
+                    try:
+                        self.session_updates.put_nowait((process, line[1], line[2]))
+                    except Full:
+                        pass
+
+        def read_and_close_status():
+            try:
+                read_status()
+            finally:
+                process.stdout.close()
+
+        Thread(target=read_and_close_status, daemon=True).start()
         self._show_status("СЛУЖБА ЗАПУЩЕНА", active=True)
 
     def _stop_process(self):
@@ -503,6 +571,15 @@ class DashboardApp(ctk.CTk):
                 pass
 
     def _poll_process(self):
+        while True:
+            try:
+                source, test_count, interview_count = self.session_updates.get_nowait()
+            except Empty:
+                break
+            if source is self.assistant_process:
+                self.session_status.configure(
+                    text=f"Сессия  TEST {test_count} · INTERVIEW {interview_count}"
+                )
         process = self.assistant_process
         if process:
             code = process.poll()

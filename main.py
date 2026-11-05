@@ -27,6 +27,7 @@ class GhostAssistApp:
         self.tasks = TaskState()
         self.sessions = SessionManager(depth=settings.memory_depth)
         self.session_task = None
+        self.managed = False
         self.commands = Queue(maxsize=32)
         self.worker = ThreadPoolExecutor(max_workers=1)
         self.future = None
@@ -184,6 +185,15 @@ class GhostAssistApp:
                                     generation,
                                     task.cancel,
                                 )
+                        if self.managed:
+                            test_count = len(self.sessions.snapshot("TEST")[1])
+                            interview_count = len(
+                                self.sessions.snapshot("INTERVIEW")[1]
+                            )
+                            print(
+                                f"GHOST_SESSION {test_count} {interview_count}",
+                                flush=True,
+                            )
                         self.hud.update_text(result, f"[{self.context.mode}] ГОТОВО")
                 except (AudioError, GenerationError) as exc:
                     if not task.cancel.is_set():
@@ -221,6 +231,7 @@ class GhostAssistApp:
 
     def run(self, managed):
         settings = self.settings
+        self.managed = managed
         bindings = {
             settings.hotkey_screen: self.capture,
             settings.hotkey_snip: self.snip,
