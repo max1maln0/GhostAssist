@@ -1,19 +1,22 @@
-import os
 import subprocess
 import sys
-import customtkinter as ctk
+import time
 from tkinter import messagebox
-from config.settings import settings
 
+import customtkinter as ctk
+from pydantic import ValidationError
+
+from config.env_file import update_env
+from config.settings import PROFILES, ROOT, Settings, profile_path, validate_hotkeys
 
 # Фирменная тёмная палитра
-BG_DARK = "#030712"        # Глубокий обсидиан
-SURFACE_CARD = "#090f1d"   # Цвет карточек Bento
+BG_DARK = "#030712"  # Глубокий обсидиан
+SURFACE_CARD = "#090f1d"  # Цвет карточек Bento
 SURFACE_INNER = "#040812"  # Внутренние поля ввода и селекторы
-ACCENT_GREEN = "#10b981"   # Изумрудный акцент
-ACCENT_HOVER = "#059669"   # Ховер акцента
-TEXT_MUTED = "#64748b"     # Приглушенный текст
-BORDER_COLOR = "#1e293b"   # Тонкие разделители
+ACCENT_GREEN = "#10b981"  # Изумрудный акцент
+ACCENT_HOVER = "#059669"  # Ховер акцента
+TEXT_MUTED = "#64748b"  # Приглушенный текст
+BORDER_COLOR = "#1e293b"  # Тонкие разделители
 
 
 class DashboardApp(ctk.CTk):
@@ -28,14 +31,24 @@ class DashboardApp(ctk.CTk):
         ctk.set_appearance_mode("dark")
 
         self.assistant_process = None
-        self.profiles_dir = os.path.join("config", "profiles")
-        os.makedirs(self.profiles_dir, exist_ok=True)
+        self.stopping_until = None
+        self.restart_pending = False
+        self.closing = False
+        try:
+            self.settings = Settings()
+        except ValidationError:
+            self.settings = Settings.model_construct()
+            self.after_idle(
+                lambda: messagebox.showerror(
+                    "Настройки", "Проверьте значения в .env перед запуском службы."
+                )
+            )
 
         self.hotkey_buttons = {}
-        self.active_binding_key = None
-
         self._setup_layout()
         self._load_profiles_list()
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.after(150, self._poll_process)
 
     def _setup_layout(self):
         self.grid_columnconfigure(0, weight=4, minsize=400)
@@ -52,29 +65,29 @@ class DashboardApp(ctk.CTk):
 
         # Карточка 1: Служба и статус перехватчика
         service_card = ctk.CTkFrame(
-            left_container, 
-            fg_color=SURFACE_CARD, 
+            left_container,
+            fg_color=SURFACE_CARD,
             corner_radius=12,
             border_width=1,
-            border_color=BORDER_COLOR
+            border_color=BORDER_COLOR,
         )
         service_card.grid(row=0, column=0, sticky="ew", pady=(0, 10))
 
         brand_lbl = ctk.CTkLabel(
-            service_card, 
-            text="GHOST // ASSIST", 
+            service_card,
+            text="GHOST // ASSIST",
             font=ctk.CTkFont(family="Consolas", size=18, weight="bold"),
-            text_color=ACCENT_GREEN
+            text_color=ACCENT_GREEN,
         )
         brand_lbl.pack(pady=(12, 4))
 
         # Pill Status Badge
         self.status_pill = ctk.CTkFrame(
-            service_card, 
-            fg_color="#1a0d14", 
+            service_card,
+            fg_color="#1a0d14",
             corner_radius=20,
             border_width=1,
-            border_color="#451a24"
+            border_color="#451a24",
         )
         self.status_pill.pack(pady=(0, 10))
 
@@ -82,7 +95,7 @@ class DashboardApp(ctk.CTk):
             self.status_pill,
             text="● SERVICE OFFLINE",
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#f43f5e"
+            text_color="#f43f5e",
         )
         self.status_text.pack(padx=14, pady=3)
 
@@ -95,69 +108,89 @@ class DashboardApp(ctk.CTk):
             text_color="#021c14",
             height=36,
             corner_radius=8,
-            command=self.toggle_assistant_process
+            command=self.toggle_assistant_process,
         )
         self.run_btn.pack(fill="x", padx=16, pady=(0, 12))
 
         # Карточка 2: Параметры инференса и снимков
         config_card = ctk.CTkFrame(
-            left_container, 
-            fg_color=SURFACE_CARD, 
+            left_container,
+            fg_color=SURFACE_CARD,
             corner_radius=12,
             border_width=1,
-            border_color=BORDER_COLOR
+            border_color=BORDER_COLOR,
         )
         config_card.grid(row=1, column=0, sticky="ew", pady=(0, 10))
 
         ctk.CTkLabel(
-            config_card, 
-            text="ПАРАМЕТРЫ ЗАПРОСОВ", 
+            config_card,
+            text="ПАРАМЕТРЫ ЗАПРОСОВ",
             font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color=TEXT_MUTED
+            text_color=TEXT_MUTED,
         ).pack(anchor="w", padx=16, pady=(10, 4))
 
-        ctk.CTkLabel(config_card, text="Модель Gemini", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=16)
+        self.api_entry = ctk.CTkEntry(
+            config_card, show="*", placeholder_text="Ключ Gemini API"
+        )
+        self.api_entry.pack(fill="x", padx=16, pady=2)
+        ctk.CTkButton(config_card, text="Сохранить ключ", command=self._save_key).pack(
+            anchor="w", padx=16, pady=(0, 4)
+        )
+        ctk.CTkLabel(config_card, text="Модель Gemini", font=ctk.CTkFont(size=12)).pack(
+            anchor="w", padx=16
+        )
         self.model_combo = ctk.CTkComboBox(
             config_card,
-            values=["gemini-3.5-flash-lite", "gemini-flash-latest", "gemini-3.5-flash", "gemini-3.1-flash-lite"],
+            values=[
+                "gemini-3.5-flash-lite",
+                "gemini-flash-latest",
+                "gemini-3.5-flash",
+                "gemini-3.1-flash-lite",
+            ],
             fg_color=SURFACE_INNER,
             border_color=BORDER_COLOR,
             button_color=BORDER_COLOR,
-            command=self._on_model_changed
+            command=self._on_model_changed,
         )
-        self.model_combo.set(settings.gemini_model)
+        self.model_combo.set(self.settings.gemini_model)
         self.model_combo.pack(fill="x", padx=16, pady=(2, 8))
 
-        ctk.CTkLabel(config_card, text="Разрешение снимка (RAM)", font=ctk.CTkFont(size=12)).pack(anchor="w", padx=16)
+        ctk.CTkLabel(
+            config_card, text="Разрешение снимка (RAM)", font=ctk.CTkFont(size=12)
+        ).pack(anchor="w", padx=16)
         self.res_combo = ctk.CTkComboBox(
             config_card,
             values=["1280x720 (Быстро, ~45 КБ)", "1920x1080 (Четко, ~90 КБ)"],
             fg_color=SURFACE_INNER,
             border_color=BORDER_COLOR,
             button_color=BORDER_COLOR,
-            command=self._on_resolution_changed
+            command=self._on_resolution_changed,
         )
-        current_res = f"{settings.crop_width}x{settings.crop_height}"
-        self.res_combo.set("1280x720 (Быстро, ~45 КБ)" if "1280" in current_res else "1920x1080 (Четко, ~90 КБ)")
+        current_res = f"{self.settings.crop_width}x{self.settings.crop_height}"
+        self.res_combo.set(
+            "1280x720 (Быстро, ~45 КБ)"
+            if "1280" in current_res
+            else "1920x1080 (Четко, ~90 КБ)"
+        )
         self.res_combo.pack(fill="x", padx=16, pady=(2, 12))
 
         # Карточка 3: Полный список горячих клавиш (все 6 биндов)
         hotkeys_card = ctk.CTkFrame(
-            left_container, 
-            fg_color=SURFACE_CARD, 
+            left_container,
+            fg_color=SURFACE_CARD,
             corner_radius=12,
             border_width=1,
-            border_color=BORDER_COLOR
+            border_color=BORDER_COLOR,
         )
         hotkeys_card.grid(row=2, column=0, sticky="nsew")
         hotkeys_card.grid_rowconfigure(1, weight=1)
         hotkeys_card.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
-            hotkeys_card, 
-            text="ГОРЯЧИЕ КЛАВИШИ (КЛИК ДЛЯ ЗАПИСИ)", 
+            hotkeys_card,
+            text="ГОРЯЧИЕ КЛАВИШИ (КЛИК ДЛЯ ЗАПИСИ)",
             font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
-            text_color=TEXT_MUTED
+            text_color=TEXT_MUTED,
         ).grid(row=0, column=0, sticky="w", padx=16, pady=(10, 4))
 
         # Скроллируемый контейнер для биндов (гарантирует идеальное отображение)
@@ -165,18 +198,21 @@ class DashboardApp(ctk.CTk):
             hotkeys_card,
             fg_color="transparent",
             scrollbar_button_color=BORDER_COLOR,
-            scrollbar_button_hover_color="#334155"
+            scrollbar_button_hover_color="#334155",
         )
         hotkeys_scroll.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
 
         # Все 6 действий системы
         hotkey_items = [
-            ("HOTKEY_SCREEN", "Фуллскрин скрин", settings.hotkey_screen),
-            ("HOTKEY_SNIP", "Снайпер (выделение)", settings.hotkey_snip),
-            ("HOTKEY_AUDIO", "Звук (Loopback)", settings.hotkey_audio),
-            ("HOTKEY_MODE", "TEST ↔ INTERVIEW", settings.hotkey_mode),
-            ("HOTKEY_HUD", "Скрыть / Показать HUD", settings.hotkey_hud),
-            ("HOTKEY_DOCK", "Сместить (Верх / Низ)", settings.hotkey_dock),
+            ("HOTKEY_SCREEN", "Фуллскрин скрин", self.settings.hotkey_screen),
+            ("HOTKEY_SNIP", "Снайпер (выделение)", self.settings.hotkey_snip),
+            ("HOTKEY_AUDIO", "Звук (Loopback)", self.settings.hotkey_audio),
+            ("HOTKEY_MODE", "TEST ↔ INTERVIEW", self.settings.hotkey_mode),
+            ("HOTKEY_HUD", "Скрыть / Показать HUD", self.settings.hotkey_hud),
+            ("HOTKEY_CANCEL", "Отменить задачу", self.settings.hotkey_cancel),
+            ("HOTKEY_PAGE_UP", "Прокрутка HUD вверх", self.settings.hotkey_page_up),
+            ("HOTKEY_PAGE_DOWN", "Прокрутка HUD вниз", self.settings.hotkey_page_down),
+            ("HOTKEY_DOCK", "Сместить (Верх / Низ)", self.settings.hotkey_dock),
         ]
 
         for env_key, label_text, default_val in hotkey_items:
@@ -184,10 +220,7 @@ class DashboardApp(ctk.CTk):
             row.pack(fill="x", padx=8, pady=3)
 
             ctk.CTkLabel(
-                row, 
-                text=label_text, 
-                font=ctk.CTkFont(size=11),
-                text_color="#94a3b8"
+                row, text=label_text, font=ctk.CTkFont(size=11), text_color="#94a3b8"
             ).pack(side="left")
 
             btn = ctk.CTkButton(
@@ -202,7 +235,7 @@ class DashboardApp(ctk.CTk):
                 hover_color="#1e293b",
                 text_color=ACCENT_GREEN,
                 corner_radius=6,
-                command=lambda k=env_key: self._start_hotkey_capture(k)
+                command=lambda k=env_key: self._start_hotkey_capture(k),
             )
             btn.pack(side="right")
             self.hotkey_buttons[env_key] = btn
@@ -211,11 +244,11 @@ class DashboardApp(ctk.CTk):
         # ПРАВАЯ КОЛОНКА (Редактор легенды кандидата)
         # ==========================================
         right_card = ctk.CTkFrame(
-            self, 
-            fg_color=SURFACE_CARD, 
+            self,
+            fg_color=SURFACE_CARD,
             corner_radius=12,
             border_width=1,
-            border_color=BORDER_COLOR
+            border_color=BORDER_COLOR,
         )
         right_card.grid(row=0, column=1, padx=(10, 20), pady=20, sticky="nsew")
         right_card.grid_rowconfigure(1, weight=1)
@@ -226,10 +259,10 @@ class DashboardApp(ctk.CTk):
         editor_header.grid(row=0, column=0, padx=18, pady=(14, 10), sticky="ew")
 
         ctk.CTkLabel(
-            editor_header, 
-            text="ЛЕГЕНДА КАНДИДАТА", 
+            editor_header,
+            text="ЛЕГЕНДА КАНДИДАТА",
             font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
-            text_color="#f8fafc"
+            text_color="#f8fafc",
         ).pack(side="left")
 
         self.save_btn = ctk.CTkButton(
@@ -242,7 +275,7 @@ class DashboardApp(ctk.CTk):
             hover_color=ACCENT_HOVER,
             text_color="#021c14",
             corner_radius=6,
-            command=self.save_current_legend
+            command=self.save_current_legend,
         )
         self.save_btn.pack(side="right", padx=(8, 0))
 
@@ -255,7 +288,7 @@ class DashboardApp(ctk.CTk):
             fg_color="#1e293b",
             hover_color="#334155",
             corner_radius=6,
-            command=self.create_new_profile
+            command=self.create_new_profile,
         )
         self.new_profile_btn.pack(side="right", padx=(8, 0))
 
@@ -267,7 +300,7 @@ class DashboardApp(ctk.CTk):
             dropdown_fg_color=SURFACE_CARD,
             width=170,
             height=30,
-            command=self.load_selected_profile
+            command=self.load_selected_profile,
         )
         self.profile_selector.pack(side="right")
 
@@ -280,191 +313,236 @@ class DashboardApp(ctk.CTk):
             border_color=BORDER_COLOR,
             corner_radius=8,
             text_color="#e2e8f0",
-            wrap="word"
+            wrap="word",
         )
         self.legend_textbox.grid(row=1, column=0, padx=18, pady=(0, 18), sticky="nsew")
 
     def _start_hotkey_capture(self, env_key):
-        """Интерактивный перехват с защитой от одиночных буквенно-цифровых клавиш."""
-        self.active_binding_key = env_key
-        target_btn = self.hotkey_buttons[env_key]
-        target_btn.configure(text="[Нажми клавиши...]", text_color="#f59e0b", fg_color="#1e293b")
+        button = self.hotkey_buttons[env_key]
+        button.focus_set()
 
-        pressed_mods = set()
-
-        def on_key_press(event):
+        def capture(event):
             key = event.keysym.lower()
-            
-            # 1. Отслеживаем модификаторы
-            mods_map = {
-                "alt_l": "<alt>", "alt_r": "<alt>",
-                "control_l": "<ctrl>", "control_r": "<ctrl>",
-                "shift_l": "<shift>", "shift_r": "<shift>"
-            }
-
-            if key in mods_map:
-                pressed_mods.add(mods_map[key])
-                return
-
-            # 2. Проверяем, является ли клавиша безопасной без модификатора
-            is_function_key = key.startswith("f") and key[1:].isdigit() and (1 <= int(key[1:]) <= 12)
-            is_safe_service_key = key in ["pause", "scroll_lock"]
-
-            # ЗАЩИТА ЛАЙВКОДИНГА: запрет одиночных букв, цифр и символов ввода
-            if not pressed_mods and not (is_function_key or is_safe_service_key):
-                self.unbind("<KeyPress>")
-                self.active_binding_key = None
-                
-                # Безопасный возврат текущего значения
-                current_val = getattr(settings, env_key.lower(), "<alt>+x")
-                if hasattr(current_val, "get_secret_value"):
-                    current_val = current_val.get_secret_value()
-                target_btn.configure(text=str(current_val), text_color=ACCENT_GREEN, fg_color=SURFACE_INNER)
-                
-                messagebox.showwarning(
-                    "Опасная клавиша",
-                    f"Клавиша '{key}' используется при наборе кода и текста!\n\n"
-                    "Чтобы не сломать ввод на лайвкодинге:\n"
-                    "• Зажмите Alt / Ctrl / Shift + нужную букву (например: Alt+{key})\n"
-                    "• Либо используйте функциональные клавиши (F1-F12, Pause)."
-                )
-                return
-
-            # 3. Нормализация специальных названий клавиш для pynput
-            keys_remap = {
-                "down": "<down>",
-                "up": "<up>",
-                "left": "<left>",
-                "right": "<right>",
-                "escape": "<esc>",
-                "return": "<enter>",
-                "space": "<space>"
-            }
-
-            if is_function_key or is_safe_service_key:
-                main_key = f"<{key}>"
-            elif key in keys_remap:
-                main_key = keys_remap[key]
-            else:
-                main_key = key if len(key) == 1 else f"<{key}>"
-
-            combo_parts = sorted(list(pressed_mods)) + [main_key]
-            final_combo = "+".join(combo_parts)
-
+            if key.startswith(("alt_", "control_", "shift_")):
+                return "break"
             self.unbind("<KeyPress>")
-            self.active_binding_key = None
-
-            # Записываем в .env и обновляем кнопку
-            self._update_env_var(env_key, final_combo)
-            target_btn.configure(text=final_combo, text_color=ACCENT_GREEN, fg_color=SURFACE_INNER)
-
-            if self.assistant_process and self.assistant_process.poll() is None:
-                messagebox.showinfo(
-                    "Хоткей обновлен", 
-                    f"Новый хоткей: {final_combo}\nПерезапустите службу ассистента кнопкой, чтобы применить."
+            mods = [
+                name
+                for mask, name in ((1, "<shift>"), (4, "<ctrl>"), (0x20000, "<alt>"))
+                if event.state & mask
+            ]
+            special = {
+                "escape": "esc",
+                "return": "enter",
+                "prior": "page_up",
+                "next": "page_down",
+            }
+            key = special.get(key, key)
+            safe_single = key in {
+                "pause",
+                "scroll_lock",
+                *(f"f{i}" for i in range(1, 13)),
+            }
+            if not mods and not safe_single:
+                messagebox.showwarning(
+                    "Хоткей", "Добавьте модификатор или выберите F1–F12."
                 )
+                return "break"
+            combo = "+".join([*mods, key if len(key) == 1 else f"<{key}>"])
+            try:
+                validate_hotkeys(self.settings, {env_key.lower(): combo})
+            except ValueError:
+                messagebox.showwarning(
+                    "Хоткей", "Комбинация недоступна или уже назначена."
+                )
+                return "break"
+            if self._save(**{env_key: combo}):
+                button.configure(text=combo)
+            return "break"
 
-        self.bind("<KeyPress>", on_key_press)
+        self.bind("<KeyPress>", capture)
 
     def _load_profiles_list(self):
-        files = [f for f in os.listdir(self.profiles_dir) if f.endswith(".md")]
-        if not files:
-            files = ["example_legend.md"]
-            default_path = os.path.join(self.profiles_dir, "example_legend.md")
-            with open(default_path, "w", encoding="utf-8") as f:
-                f.write("# Опыт и специализация кандидата\n- Системный анализ, REST API, брокеры сообщений (Kafka, RabbitMQ)\n- PostgreSQL, проектирование ER-диаграмм, SQL-запросы\n- Опыт в финтех и энтерпрайз сервисах\n")
-
+        PROFILES.mkdir(parents=True, exist_ok=True)
+        files = []
+        for path in sorted(PROFILES.glob("*.md")):
+            try:
+                if profile_path(path.name).is_file():
+                    files.append(path.name)
+            except ValueError:
+                continue
         self.profile_selector.configure(values=files)
-        target = settings.active_profile if settings.active_profile in files else files[0]
-        self.profile_selector.set(target)
-        self.load_selected_profile(target)
+        if files:
+            target = (
+                self.settings.active_profile
+                if self.settings.active_profile in files
+                else files[0]
+            )
+            self.profile_selector.set(target)
+            self.load_selected_profile(target, save=False)
 
-    def load_selected_profile(self, profile_name):
-        path = os.path.join(self.profiles_dir, profile_name)
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read()
-            self.legend_textbox.delete("1.0", "end")
-            self.legend_textbox.insert("1.0", content)
-            self._update_env_var("ACTIVE_PROFILE", profile_name)
+    def load_selected_profile(self, name, save=True):
+        try:
+            content = profile_path(name).read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            messagebox.showerror("Профиль", "Не удалось прочитать профиль.")
+            return
+        self.legend_textbox.delete("1.0", "end")
+        self.legend_textbox.insert("1.0", content)
+        if save:
+            self._save(ACTIVE_PROFILE=name)
 
     def save_current_legend(self):
-        profile_name = self.profile_selector.get()
-        path = os.path.join(self.profiles_dir, profile_name)
-        content = self.legend_textbox.get("1.0", "end-1c")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        messagebox.showinfo("Сохранено", f"Профиль {profile_name} обновлен!")
+        name = self.profile_selector.get()
+        try:
+            profile_path(name).write_text(
+                self.legend_textbox.get("1.0", "end-1c"), encoding="utf-8"
+            )
+        except (OSError, ValueError):
+            messagebox.showerror("Профиль", "Не удалось сохранить профиль.")
+            return
+        self._save(ACTIVE_PROFILE=name)
 
     def create_new_profile(self):
-        dialog = ctk.CTkInputDialog(text="Название файла профиля (например: sber_sa.md):", title="Новая легенда")
-        name = dialog.get_input()
-        if name:
-            if not name.endswith(".md"):
-                name += ".md"
-            path = os.path.join(self.profiles_dir, name)
-            if not os.path.exists(path):
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(f"# Профиль: {name}\n- Ключевые навыки под вакансию:\n- Проекты и кейсы:\n")
-            self._load_profiles_list()
-            self.profile_selector.set(name)
-            self.load_selected_profile(name)
+        name = ctk.CTkInputDialog(
+            text="Имя файла профиля .md", title="Новый профиль"
+        ).get_input()
+        if not name:
+            return
+        if not name.lower().endswith(".md"):
+            name += ".md"
+        try:
+            with profile_path(name).open("x", encoding="utf-8") as profile:
+                profile.write(f"# Профиль {name}\n")
+        except (ValueError, OSError):
+            messagebox.showerror("Профиль", "Некорректное или уже занятое имя файла.")
+            return
+        self._load_profiles_list()
+        self.profile_selector.set(name)
+        self.load_selected_profile(name)
 
-    def _on_model_changed(self, new_model):
-        self._update_env_var("GEMINI_MODEL", new_model)
+    def _save_key(self):
+        key = self.api_entry.get().strip()
+        if not key or not key.isascii() or any(char.isspace() for char in key):
+            messagebox.showwarning("Gemini", "Введите ключ Gemini API.")
+            return
+        if self._save(GEMINI_API_KEY=key):
+            self.api_entry.delete(0, "end")
+            if not self.assistant_process:
+                self._show_status("КЛЮЧ СОХРАНЁН")
 
-    def _on_resolution_changed(self, val):
-        if "1920" in val:
-            self._update_env_var("CROP_WIDTH", "1920")
-            self._update_env_var("CROP_HEIGHT", "1080")
-        else:
-            self._update_env_var("CROP_WIDTH", "1280")
-            self._update_env_var("CROP_HEIGHT", "720")
+    def _on_model_changed(self, model):
+        self._save(GEMINI_MODEL=model)
 
-    def _update_env_var(self, key, value):
-        """Безопасная построчная запись настроек в .env без склейки строк."""
-        env_path = ".env"
-        lines = []
-        found = False
-        
-        if os.path.exists(env_path):
-            with open(env_path, "r", encoding="utf-8") as f:
-                lines = [line.strip() for line in f.readlines() if line.strip()]
+    def _on_resolution_changed(self, value):
+        width, height = ("1920", "1080") if "1920" in value else ("1280", "720")
+        self._save(CROP_WIDTH=width, CROP_HEIGHT=height)
 
-        new_lines = []
-        for line in lines:
-            if line.startswith(f"{key}="):
-                new_lines.append(f"{key}={value}")
-                found = True
-            else:
-                new_lines.append(line)
+    def _save(self, **values):
+        try:
+            Settings(**{key.lower(): value for key, value in values.items()})
+            update_env(values)
+            self.settings = Settings()
+        except (ValueError, OSError):
+            messagebox.showerror("Настройки", "Проверьте файл .env и права на запись.")
+            return False
+        if self.assistant_process and self.assistant_process.poll() is None:
+            self.restart_pending = True
+            self._stop_process()
+        return True
 
-        if not found:
-            new_lines.append(f"{key}={value}")
-
-        with open(env_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(new_lines) + "\n")
+    def _show_status(self, text, active=False):
+        self.status_pill.configure(fg_color="#032617" if active else "#1a0d14")
+        self.status_text.configure(
+            text=f"● {text}", text_color=ACCENT_GREEN if active else "#f43f5e"
+        )
+        self.run_btn.configure(
+            text="ОСТАНОВИТЬ СЛУЖБУ" if active else "ЗАПУСТИТЬ СЛУЖБУ",
+            fg_color="#e11d48" if active else ACCENT_GREEN,
+            hover_color="#be123c" if active else ACCENT_HOVER,
+            text_color="#ffffff" if active else "#021c14",
+        )
 
     def toggle_assistant_process(self):
-        if self.assistant_process is None or self.assistant_process.poll() is not None:
-            self.assistant_process = subprocess.Popen([sys.executable, "main.py"])
-            self.status_pill.configure(fg_color="#032617", border_color="#065f46")
-            self.status_text.configure(text="● SERVICE ACTIVE (HOTKEYS ON)", text_color=ACCENT_GREEN)
-            self.run_btn.configure(text="ОСТАНОВИТЬ СЛУЖБУ", fg_color="#e11d48", hover_color="#be123c", text_color="#ffffff")
-        else:
-            self.assistant_process.terminate()
+        if self.assistant_process and self.assistant_process.poll() is not None:
+            self.assistant_process.stdin.close()
             self.assistant_process = None
-            self.status_pill.configure(fg_color="#1a0d14", border_color="#451a24")
-            self.status_text.configure(text="● SERVICE OFFLINE", text_color="#f43f5e")
-            self.run_btn.configure(text="АКТИВИРОВАТЬ ПЕРЕХВАТ", fg_color=ACCENT_GREEN, hover_color=ACCENT_HOVER, text_color="#021c14")
+        if self.assistant_process:
+            self.restart_pending = False
+            self._stop_process()
+            return
+        try:
+            self.settings = Settings()
+            validate_hotkeys(self.settings)
+        except ValueError:
+            messagebox.showerror("Настройки", "Проверьте .env и комбинации клавиш.")
+            return
+        if not self.settings.has_api_key:
+            messagebox.showwarning(
+                "Gemini", "Укажите ключ Gemini API в Dashboard или .env."
+            )
+            return
+        try:
+            self.assistant_process = subprocess.Popen(
+                [sys.executable, str(ROOT / "main.py"), "--managed"],
+                cwd=ROOT,
+                stdin=subprocess.PIPE,
+            )
+        except OSError:
+            self._show_status("НЕ УДАЛОСЬ ЗАПУСТИТЬ СЛУЖБУ")
+            return
+        self._show_status("СЛУЖБА ЗАПУЩЕНА", active=True)
+
+    def _stop_process(self):
+        process = self.assistant_process
+        if process and self.stopping_until is None:
+            self.stopping_until = time.monotonic() + 4
+            self.run_btn.configure(state="disabled")
+            self.status_text.configure(text="● ОСТАНОВКА СЛУЖБЫ")
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+
+    def _poll_process(self):
+        process = self.assistant_process
+        if process:
+            code = process.poll()
+            if code is not None:
+                process.stdin.close()
+                self.assistant_process = None
+                self.stopping_until = None
+                self.run_btn.configure(state="normal")
+                self._show_status(
+                    "СЛУЖБА ОСТАНОВЛЕНА" if code == 0 else f"СБОЙ СЛУЖБЫ ({code})"
+                )
+                if self.restart_pending and not self.closing:
+                    self.restart_pending = False
+                    self.toggle_assistant_process()
+            elif (
+                self.stopping_until is not None
+                and time.monotonic() >= self.stopping_until
+            ):
+                try:
+                    process.kill()
+                except OSError:
+                    if process.poll() is None:
+                        self.status_text.configure(
+                            text="● НЕ УДАЛОСЬ ОСТАНОВИТЬ СЛУЖБУ"
+                        )
+        if self.closing and self.assistant_process is None:
+            self.destroy()
+        else:
+            self.after(150, self._poll_process)
 
     def on_closing(self):
-        if self.assistant_process and self.assistant_process.poll() is None:
-            self.assistant_process.terminate()
-        self.destroy()
+        self.closing = True
+        self.restart_pending = False
+        if self.assistant_process:
+            self._stop_process()
+        else:
+            self.destroy()
 
 
 if __name__ == "__main__":
-    app = DashboardApp()
-    app.protocol("WM_DELETE_WINDOW", app.on_closing)
-    app.mainloop()
+    DashboardApp().mainloop()

@@ -1,127 +1,164 @@
+import asyncio
 import io
-import time
-import threading
-import mss
+from contextlib import aclosing
+
 import httpx
-from PIL import Image
+import mss
 from google import genai
-from google.genai import types
-from config.settings import settings
+from google.genai import errors, types
+from PIL import Image
+
+MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash")
+
+
+class GenerationError(RuntimeError):
+    pass
 
 
 class LLMWorker:
-    def __init__(self, context_manager):
-        self.ctx = context_manager
-        
-        # Инициализируем клиент официального SDK через защищенный SecretStr
-        self.client = genai.Client(
-            api_key=settings.gemini_api_key.get_secret_value()
+    def __init__(self, settings):
+        self.settings = settings
+        self.models = tuple(dict.fromkeys((settings.gemini_model, *MODELS)))
+
+    def capture_screen(self, bbox=None):
+        with mss.mss() as capture:
+            area = bbox or next(
+                (
+                    monitor
+                    for monitor in capture.monitors[1:]
+                    if monitor["left"] == monitor["top"] == 0
+                ),
+                capture.monitors[1],
+            )
+            if area["width"] * area["height"] > 40_000_000:
+                raise GenerationError("Выберите меньшую область экрана.")
+            shot = capture.grab(area)
+            image = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+        if bbox is None:
+            image.thumbnail((self.settings.crop_width, self.settings.crop_height))
+        with io.BytesIO() as buffer:
+            image.save(buffer, format="JPEG", quality=75)
+            return buffer.getvalue()
+
+    async def _generate(self, data, mime_type, prompt, publish):
+        options = types.HttpOptions(
+            timeout=int(self.settings.request_timeout * 1000),
+            retry_options=types.HttpRetryOptions(attempts=1),
         )
-        
-        # Пул моделей с автоматическим переключением при сбоях 503 / квотах
-        self.models_pool = [
-            settings.gemini_model,
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-3.5-flash"
-        ]
-        # Очищаем дубликаты с сохранением порядка
-        self.models_pool = list(dict.fromkeys(self.models_pool))
+        client = genai.Client(
+            api_key=self.settings.gemini_api_key.get_secret_value().strip(),
+            http_options=options,
+        )
+        try:
+            async with client.aio as api:
+                last = "Модель не вернула ответ."
+                for index, model in enumerate(self.models):
+                    if index:
+                        publish("")
+                        await asyncio.sleep(0.4 * 2 ** (index - 1))
+                    try:
+                        return await asyncio.wait_for(
+                            self._stream(api, model, data, mime_type, prompt, publish),
+                            self.settings.request_timeout,
+                        )
+                    except errors.APIError as exc:
+                        code = exc.code
+                        details = exc.details
+                        info = (
+                            details.get("error", {})
+                            if isinstance(details, dict)
+                            else {}
+                        )
+                        reasons = (
+                            info.get("details") if isinstance(info, dict) else None
+                        )
+                        invalid_key = isinstance(reasons, list) and any(
+                            isinstance(item, dict)
+                            and item.get("reason") == "API_KEY_INVALID"
+                            for item in reasons
+                        )
+                        if code in (401, 403) or invalid_key:
+                            raise GenerationError(
+                                "Gemini отказал в доступе. Проверьте API-ключ."
+                            ) from None
+                        if code not in (404, 408, 429) and not 500 <= code < 600:
+                            raise GenerationError(
+                                f"Gemini отклонил запрос (HTTP {code})."
+                            ) from None
+                        last = {
+                            404: "Модель Gemini недоступна.",
+                            429: "Достигнут лимит запросов Gemini.",
+                            408: "Истекло время ожидания Gemini.",
+                            504: "Истекло время ожидания Gemini.",
+                        }.get(code, "Временный сбой Gemini.")
+                    except (asyncio.TimeoutError, httpx.TimeoutException):  # noqa: UP041 (Python 3.10)
+                        last = "Истекло время ожидания Gemini."
+                    except httpx.TransportError:
+                        last = "Не удалось подключиться к Gemini."
+                    except GenerationError as exc:
+                        last = str(exc)
+                raise GenerationError(last)
+        finally:
+            client.close()
 
-        # Фоновый прогрев TLS-сессии при запуске
-        self._warmup_connection()
+    async def _stream(self, api, model, data, mime_type, prompt, publish):
+        instruction = (
+            "Ответь на вопрос из аудио."
+            if mime_type == "audio/wav"
+            else "Ответь на вопрос с изображения."
+        )
+        stream = await api.models.generate_content_stream(
+            model=model,
+            contents=[
+                types.Part.from_bytes(data=data, mime_type=mime_type),
+                instruction,
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=prompt,
+                temperature=0.2,
+                max_output_tokens=1024,
+                thinking_config=types.ThinkingConfig(thinking_level="MINIMAL")
+                if model in MODELS
+                else None,
+            ),
+        )
+        answer = ""
+        finish = None
+        async with aclosing(stream):
+            async for chunk in stream:
+                if chunk.candidates and chunk.candidates[0].finish_reason:
+                    finish = chunk.candidates[0].finish_reason
+                if chunk.text:
+                    answer += chunk.text
+                    publish(answer)
+        if not answer.strip():
+            raise GenerationError("Gemini вернул пустой ответ.")
+        if finish != types.FinishReason.STOP:
+            raise GenerationError("Gemini завершил генерацию без полного ответа.")
+        return answer
 
-    def _warmup_connection(self):
-        """Прогревает сетевой сокет и TLS-сессию в фоне, срезая задержку первого запроса."""
-        def _warm():
+    def generate(self, data, mime_type, prompt, publish, cancel, *, budget=None):
+        async def run():
+            if cancel.is_set():
+                return None
+            timeout = self.settings.task_timeout if budget is None else budget
+            if timeout <= 0:
+                raise GenerationError("Превышено общее время обработки.")
+            task = asyncio.create_task(self._generate(data, mime_type, prompt, publish))
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
             try:
-                self.client.models.generate_content(
-                    model=settings.gemini_model,
-                    contents="ping",
-                    config=types.GenerateContentConfig(max_output_tokens=1)
-                )
-                print("[INIT] Сессия с Gemini API успешно прогрета.")
-            except Exception as e:
-                print(f"[INIT] Фоновый прогрев пропущен/ошибка: {e}")
+                while not cancel.is_set():
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        raise GenerationError("Превышено общее время обработки Gemini.")
+                    done, _ = await asyncio.wait((task,), timeout=min(remaining, 0.05))
+                    if done:
+                        return task.result()
+                return None
+            finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
-        threading.Thread(target=_warm, daemon=True).start()
-
-    def capture_screen_ram(self, bbox: dict = None) -> bytes:
-        """Снимает либо указанную область (bbox), либо весь основной экран."""
-        t0 = time.time()
-        with mss.mss() as sct:
-            # Если передана область — грабим ровно её, иначе полный монитор
-            grab_area = bbox if bbox else sct.monitors[1]
-            raw_shot = sct.grab(grab_area)
-            
-            img = Image.frombytes("RGB", raw_shot.size, raw_shot.bgra, "raw", "BGRX")
-            
-            # Для фрагмента ресайз не нужен, чтобы сохранить четкость шрифтов!
-            if not bbox:
-                img.thumbnail((settings.crop_width, settings.crop_height), Image.Resampling.BILINEAR)
-            
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=75, optimize=False)
-            jpeg_bytes = buf.getvalue()
-            buf.close()
-            
-        area_type = f"ROI {bbox['width']}x{bbox['height']}" if bbox else "FULL SCREEN"
-        print(f"[PERF] Снимок ({area_type}): {(time.time() - t0) * 1000:.1f} мс, вес: {len(jpeg_bytes) // 1024} КБ")
-        return jpeg_bytes
-
-    def analyze_screen_stream(self, on_chunk_callback, bbox: dict = None):
-        """Принимает опциональный bbox выделенной области."""
-        t_start = time.time()
-        image_bytes = self.capture_screen_ram(bbox=bbox)
-        sys_prompt = self.ctx.get_system_prompt()
-        
-        image_part = types.Part.from_bytes(
-            data=image_bytes, 
-            mime_type="image/jpeg"
-        )
-
-        last_error = None
-        for model_name in self.models_pool:
-            for attempt in range(2):
-                try:
-                    # Жесткое ограничение токенов для мгновенного ответа
-                    config = types.GenerateContentConfig(
-                        system_instruction=sys_prompt,
-                        temperature=0.0,
-                        max_output_tokens=120 if self.ctx.mode == "TEST" else 350,
-                    )
-
-                    response_stream = self.client.models.generate_content_stream(
-                        model=model_name,
-                        contents=[
-                            image_part, 
-                            "Считай экран и дай ответ СТРОГО по шаблону 'Вопрос: ...\\nОтвет: ...'."
-                        ],
-                        config=config
-                    )
-                    accumulated = ""
-                    first_chunk = True
-                    for chunk in response_stream:
-                        if chunk.text:
-                            if first_chunk:
-                                print(f"[PERF] Первый токен получен через: {time.time() - t_start:.2f} сек (модель: {model_name})")
-                                first_chunk = False
-                            accumulated += chunk.text
-                            on_chunk_callback(accumulated)
-
-                    print(f"[PERF] Полный ответ сформирован за: {time.time() - t_start:.2f} сек")
-                    return  # Успешно отработано
-
-                except Exception as e:
-                    last_error = e
-                    err_str = str(e)
-                    # Если кратковременная ошибка перегрузки 503 — делаем секундную паузу
-                    if "503" in err_str and attempt == 0:
-                        time.sleep(1.0)
-                        continue
-                    print(f"[WARN] Модель {model_name} недоступна ({type(e).__name__}), проверяю следующую...")
-                    break
-
-        err_msg = f"[Ошибка API]: {last_error}"
-        print(err_msg)
-        on_chunk_callback(err_msg)
+        return asyncio.run(run())

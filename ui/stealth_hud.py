@@ -1,15 +1,15 @@
-import queue
-import tkinter as tk
 import ctypes
+import textwrap
+import tkinter as tk
 from ctypes import wintypes
+from tkinter import font
+
+from ui.snipping_tool import exclude_from_capture, window_handle
 
 # Win32 константы
 GWL_EXSTYLE = -20
-WS_EX_NOACTIVATE = 0x08000000      # Запрет перехвата фокуса клавиатуры
-WS_EX_TRANSPARENT = 0x00000020     # Сквозной клик (мышь полностью игнорирует окно)
-WDA_EXCLUDEFROMCAPTURE = 0x00000011 # Скрытие из OBS/Zoom/Meet (Windows 10 2004+)
-WDA_MONITOR = 0x00000001            # Fallback для старых сборок Windows
-GA_ROOT = 2                         # Дескриптор корневого окна верхнего уровня
+WS_EX_NOACTIVATE = 0x08000000  # Запрет перехвата фокуса клавиатуры
+WS_EX_TRANSPARENT = 0x00000020  # Сквозной клик (мышь полностью игнорирует окно)
 
 
 class StealthHUD:
@@ -19,15 +19,11 @@ class StealthHUD:
         self.max_height = max_height
         self.is_visible = True
         self.current_height = initial_height
-        
-        self.msg_queue = queue.Queue()
 
         self.root = tk.Tk()
         self._setup_window()
         self._setup_widgets()
         self._apply_win32_styles()
-
-        self.root.after(30, self._poll_queue)
 
     def _setup_window(self):
         self.root.title("GhostHUD")
@@ -39,11 +35,15 @@ class StealthHUD:
         # Стартовая позиция: верх экрана по центру
         self.screen_w = self.root.winfo_screenwidth()
         self.screen_h = self.root.winfo_screenheight()
+        self.width = min(self.width, self.screen_w - 32)
+        self.max_height = min(self.max_height, self.screen_h - 64)
         self.pos_x = (self.screen_w - self.width) // 2
         self.pos_y = 16
         self.is_docked_top = True
 
-        self.root.geometry(f"{self.width}x{self.initial_height}+{self.pos_x}+{self.pos_y}")
+        self.root.geometry(
+            f"{self.width}x{self.initial_height}+{self.pos_x}+{self.pos_y}"
+        )
 
     def _setup_widgets(self):
         self.border_frame = tk.Frame(self.root, bg="#1e293b", padx=1, pady=1)
@@ -61,16 +61,16 @@ class StealthHUD:
             text="● [TEST] READY",
             font=("Consolas", 9, "bold"),
             fg="#10b981",
-            bg="#080e1a"
+            bg="#080e1a",
         )
         self.status_label.pack(side=tk.LEFT)
 
         self.hint_label = tk.Label(
             self.header,
-            text="[Alt+Down]: Верх/Низ | [Alt+X]: Скрыть | Click-Through: ON",
+            text="GhostAssist",
             font=("Segoe UI", 8),
             fg="#475569",
-            bg="#080e1a"
+            bg="#080e1a",
         )
         self.hint_label.pack(side=tk.RIGHT)
 
@@ -82,104 +82,65 @@ class StealthHUD:
             bg="#080e1a",
             bd=0,
             highlightthickness=0,
-            wrap=tk.WORD
+            wrap=tk.WORD,
         )
         self.text_widget.pack(fill=tk.BOTH, expand=True)
         self.text_widget.insert("1.0", "Ожидание входящей задачи...")
         self.text_widget.config(state=tk.DISABLED)
 
     def _apply_win32_styles(self):
-        """Гарантирует stealth-невидимость и 100% сквозной клик через окно."""
-        try:
-            self.root.update()
-            user32 = ctypes.windll.user32
-            kernel32 = ctypes.windll.kernel32
-
-            raw_id = self.root.winfo_id()
-            hwnd = user32.GetAncestor(raw_id, GA_ROOT)
-            if not hwnd:
-                hwnd = raw_id
-
-            # 1. Защита от захвата экрана и скриншотеров
-            res = user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
-            if res == 0:
-                err = kernel32.GetLastError()
-                print(f"[STEALTH WARN] WDA_EXCLUDEFROMCAPTURE не применился (код {err}), пробуем WDA_MONITOR...")
-                user32.SetWindowDisplayAffinity(hwnd, WDA_MONITOR)
-            else:
-                print(f"[STEALTH OK] Окно скрыто от захвата экрана (HWND: {hex(hwnd)})")
-
-            # 2. Не забирать фокус + пропускать клики мыши насквозь в браузер/IDE
-            current_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            new_style = current_style | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT
-            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
-            print("[STEALTH OK] Включен режим Click-Through (сквозной клик)")
-
-        except Exception as e:
-            print(f"[HUD ERROR] Ошибка настройки Win32 стилей: {e}")
-
-    def _adjust_window_size(self):
         self.root.update_idletasks()
-        num_lines = int(self.text_widget.index('end-1c').split('.')[0])
-        line_height = 18
-        calculated_height = max(self.initial_height, min(num_lines * line_height + 44, self.max_height))
-        
-        self.current_height = calculated_height
+        hwnd = window_handle(self.root)
+        user32 = ctypes.windll.user32
+        user32.GetWindowLongW.argtypes = (wintypes.HWND, ctypes.c_int)
+        user32.SetWindowLongW.argtypes = (wintypes.HWND, ctypes.c_int, ctypes.c_long)
+        if not exclude_from_capture(hwnd):
+            print("Windows не применил ограничение захвата HUD.")
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongW(
+            hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT
+        )
 
-        if not self.is_docked_top:
-            self.pos_y = self.screen_h - self.current_height - 35
+    def _adjust_window_size(self, text):
+        hud_font = font.Font(font=self.text_widget["font"])
+        columns = max(1, (self.width - 36) // hud_font.measure("M"))
+        height = hud_font.metrics("linespace")
+        lines = sum(
+            max(1, len(textwrap.wrap(line, width=columns))) for line in text.split("\n")
+        )
+        self.current_height = max(
+            self.initial_height, min(lines * height + 44, self.max_height)
+        )
+        self._position()
 
-        self.root.geometry(f"{self.width}x{self.current_height}+{self.pos_x}+{self.pos_y}")
+    def _position(self):
+        y = 16 if self.is_docked_top else self.screen_h - self.current_height - 35
+        self.root.geometry(f"{self.width}x{self.current_height}+{self.pos_x}+{y}")
 
-    def update_text(self, text: str = None, status: str = None):
-        self.msg_queue.put(("TEXT", text, status))
+    def update_text(self, text=None, status=None):
+        if status is not None:
+            color = "#10b981" if "ГОТОВО" in status else "#f59e0b"
+            if status == "ОШИБКА":
+                color = "#f43f5e"
+            self.status_label.config(text=status, fg=color)
+        if text is not None:
+            self.text_widget.config(state=tk.NORMAL)
+            self.text_widget.delete("1.0", tk.END)
+            self.text_widget.insert("1.0", text)
+            self.text_widget.config(state=tk.DISABLED)
+            self.text_widget.see("1.0")
+            self._adjust_window_size(text)
 
     def toggle_visibility(self):
-        self.msg_queue.put(("TOGGLE", None, None))
+        self.is_visible = not self.is_visible
+        self.root.attributes("-alpha", 0.92 if self.is_visible else 0.0)
 
     def toggle_dock_position(self):
-        self.msg_queue.put(("DOCK_TOGGLE", None, None))
+        self.is_docked_top = not self.is_docked_top
+        self._position()
 
-    def _poll_queue(self):
-        try:
-            while True:
-                item = self.msg_queue.get_nowait()
-                action = item[0]
-
-                if action == "TEXT":
-                    _, text, status = item
-                    if status:
-                        self.status_label.config(text=status)
-                        if any(k in status for k in ("СЛУШАЮ", "ЗАПРОС", "СКАН", "АНАЛИЗ")):
-                            self.status_label.config(fg="#f59e0b")
-                        elif any(k in status for k in ("READY", "ГОТОВО", "ОТВЕТ")):
-                            self.status_label.config(fg="#10b981")
-                        elif "ОШИБКА" in status:
-                            self.status_label.config(fg="#f43f5e")
-
-                    if text:
-                        self.text_widget.config(state=tk.NORMAL)
-                        self.text_widget.delete("1.0", tk.END)
-                        self.text_widget.insert("1.0", text)
-                        self.text_widget.config(state=tk.DISABLED)
-                    self._adjust_window_size()
-
-                elif action == "TOGGLE":
-                    self.is_visible = not self.is_visible
-                    self.root.attributes("-alpha", 0.92 if self.is_visible else 0.0)
-
-                elif action == "DOCK_TOGGLE":
-                    if self.is_docked_top:
-                        self.pos_y = self.screen_h - self.current_height - 35
-                        self.is_docked_top = False
-                    else:
-                        self.pos_y = 16
-                        self.is_docked_top = True
-                    self.root.geometry(f"{self.width}x{self.current_height}+{self.pos_x}+{self.pos_y}")
-
-        except queue.Empty:
-            pass
-        self.root.after(30, self._poll_queue)
+    def scroll(self, pages):
+        self.text_widget.yview_scroll(pages, "pages")
 
     def run(self):
         self.root.mainloop()
