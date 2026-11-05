@@ -10,7 +10,7 @@ from time import monotonic
 from pynput import keyboard, mouse
 
 from config.settings import Settings, validate_hotkeys
-from core.audio_worker import AudioError, record_wav
+from core.audio_worker import AudioError, SegmentQueue, record_wav
 from core.context_manager import ContextManager
 from core.llm_worker import GenerationError, LLMWorker
 from core.session_manager import SessionManager
@@ -34,6 +34,11 @@ class GhostAssistApp:
         self.managed = False
         self.commands = Queue(maxsize=32)
         self.worker = ThreadPoolExecutor(max_workers=1)
+        self.capture_worker = ThreadPoolExecutor(max_workers=1)
+        self.capture_future = None
+        self.capture_stop = None
+        self.segments = None
+        self.lost_segments = 0
         self.future = None
         self.overlay = None
         self.review = None
@@ -83,6 +88,42 @@ class GhostAssistApp:
             self.submit(task, bbox=bbox)
 
     def audio(self):
+        if self.settings.vad_enabled:
+            if self.monitoring:
+                self.cancel()
+                return
+            if (
+                self.capture_future is not None
+                or self.segments is not None
+                or self.tasks.state is not State.IDLE
+            ):
+                return
+            self.monitoring = True
+            self.lost_segments = 0
+            self.capture_stop = Event()
+            max_bytes = self.settings.audio_max_mib * 1024 * 1024
+            segment_limit = max_bytes // 5
+            self.segments = SegmentQueue(max_bytes - segment_limit)
+            queue = self.segments
+            stop = self.capture_stop
+            options = {
+                "min_speech_ms": self.settings.vad_min_speech_ms,
+                "silence_ms": self.settings.vad_silence_ms,
+                "max_seconds": self.settings.vad_max_seconds,
+                "sensitivity": self.settings.vad_sensitivity,
+            }
+            self.hud.update_text("", "VAD · ЗАПИСЬ")
+            self.capture_future = self.capture_worker.submit(
+                record_wav,
+                stop,
+                stop,
+                self.settings.audio_max_seconds,
+                segment_limit,
+                self.settings.audio_device,
+                vad_options=options,
+                on_segment=queue.put,
+            )
+            return
         if self.tasks.state is State.RECORDING:
             self.tasks.active.stop.set()
             self.tasks.active.state = State.PROCESSING
@@ -90,10 +131,9 @@ class GhostAssistApp:
             return
         task = self.tasks.begin(State.RECORDING)
         if task:
-            self.monitoring = self.settings.vad_enabled
             self.submit(task, audio=True)
 
-    def submit(self, task, bbox=None, audio=False):
+    def submit(self, task, bbox=None, audio=False, audio_data=None):
         mode = "INTERVIEW" if audio else self.context.mode
         prompt = self.context.get_system_prompt(mode=mode)
         generation, history = self.sessions.snapshot(mode)
@@ -103,29 +143,24 @@ class GhostAssistApp:
         self.session_question = None
         self.task_started = monotonic()
         status = (
-            "VAD · ЗАПИСЬ"
-            if audio and self.settings.vad_enabled
+            "VAD · ТРАНСКРИБАЦИЯ"
+            if audio_data is not None
             else ("СЛУШАЮ СИСТЕМУ" if audio else "СКАН ЭКРАНА")
         )
         self.hud.update_text("", status)
 
         def work():
             started = monotonic()
-            if audio:
+            if audio_data is not None:
+                data = audio_data
+            elif audio:
                 data = record_wav(
                     task.stop,
                     task.cancel,
                     self.settings.audio_max_seconds,
                     self.settings.audio_max_mib * 1024 * 1024,
                     self.settings.audio_device,
-                    vad_options={
-                        "min_speech_ms": self.settings.vad_min_speech_ms,
-                        "silence_ms": self.settings.vad_silence_ms,
-                        "max_seconds": self.settings.vad_max_seconds,
-                        "sensitivity": self.settings.vad_sensitivity,
-                    }
-                    if self.settings.vad_enabled
-                    else None,
+                    vad_options=None,
                 )
             else:
                 data = self.llm.capture_screen(bbox)
@@ -161,7 +196,10 @@ class GhostAssistApp:
     def show_transcript(self, task, text):
         if not text or not text.strip():
             raise GenerationError("Речь не распознана.")
-        self.hud.update_text(text, "ПРОВЕРЬТЕ ТРАНСКРИПЦИЮ")
+        status = (
+            "VAD · ПРОВЕРЬТЕ ТЕКСТ" if self.monitoring else "ПРОВЕРЬТЕ ТРАНСКРИПЦИЮ"
+        )
+        self.hud.update_text(text, status)
         self.review = tk.Toplevel(self.hud.root)
         self.review.title("Проверка распознанной речи")
         self.review.attributes("-topmost", True)
@@ -179,6 +217,12 @@ class GhostAssistApp:
         editor.insert("1.0", text)
 
         def submit():
+            if (
+                self.review is None
+                or self.tasks.active is not task
+                or task.cancel.is_set()
+            ):
+                return
             question = editor.get("1.0", "end-1c").strip()
             if not question:
                 return
@@ -191,7 +235,8 @@ class GhostAssistApp:
             if generation != current_generation or not self.settings.memory_enabled:
                 history = ()
             prompt = self.context.get_system_prompt(mode=mode)
-            self.hud.update_text(question, "ЗАПРОС GEMINI")
+            status = "VAD · ЗАПРОС GEMINI" if self.monitoring else "ЗАПРОС GEMINI"
+            self.hud.update_text(question, status)
 
             def work():
                 return self.llm.generate(
@@ -209,17 +254,38 @@ class GhostAssistApp:
         controls = tk.Frame(self.review, bg="#080e1a")
         controls.pack(pady=(0, 12))
         tk.Button(controls, text="Отправить", command=submit).pack(side="left", padx=5)
-        tk.Button(controls, text="Отменить", command=self.cancel).pack(
+        tk.Button(controls, text="Отменить", command=self.cancel_review).pack(
             side="left", padx=5
         )
-        self.review.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.review.protocol("WM_DELETE_WINDOW", self.cancel_review)
         if self.settings.auto_send_transcript:
             self.review.after(0, submit)
 
+    def cancel_review(self):
+        task = self.tasks.active
+        if self.review is None or task is None:
+            return
+        task.cancel.set()
+        self.review.destroy()
+        self.review = None
+        self.tasks.finish(task)
+        self.session_task = None
+        self.task_started = None
+        status = "VAD · СЛУШАЮ" if self.monitoring else "ГОТОВО"
+        self.hud.update_text("Реплика отменена.", status)
+
     def cancel(self):
         self.monitoring = False
+        if self.capture_stop:
+            self.capture_stop.set()
+        if self.segments:
+            self.segments.close()
+            self.segments = None
         task = self.tasks.active
         if not task:
+            self.hud.update_text(
+                status="VAD · ОСТАНОВКА" if self.capture_future else "ГОТОВО"
+            )
             return
         self.tasks.cancel()
         self.hud.update_text("Задача отменена.", "ОТМЕНА")
@@ -302,15 +368,16 @@ class GhostAssistApp:
                                 f"GHOST_SESSION {test_count} {interview_count}",
                                 flush=True,
                             )
-                        self.hud.update_text(result, f"[{self.context.mode}] ГОТОВО")
-                        if self.monitoring and not self.closing:
-                            self.hud.root.after(0, self.audio)
+                        status = (
+                            "VAD · СЛУШАЮ"
+                            if self.monitoring
+                            else f"[{self.context.mode}] ГОТОВО"
+                        )
+                        self.hud.update_text(result, status)
                 except (AudioError, GenerationError) as exc:
-                    self.monitoring = False
                     if not task.cancel.is_set():
                         self.hud.update_text(str(exc), "ОШИБКА")
                 except Exception:  # noqa: BLE001 - isolate the application boundary
-                    self.monitoring = False
                     if self.review:
                         self.review.destroy()
                         self.review = None
@@ -336,8 +403,49 @@ class GhostAssistApp:
                 preview = task.preview()
                 if preview is not None:
                     task.state = State.STREAMING
-                    self.hud.update_text(preview, "ЗАПРОС GEMINI")
-        if self.closing and self.future is None:
+                    status = (
+                        "VAD · ЗАПРОС GEMINI" if self.monitoring else "ЗАПРОС GEMINI"
+                    )
+                    self.hud.update_text(preview, status)
+        if self.capture_future is not None and self.capture_future.done():
+            try:
+                self.capture_future.result()
+            except AudioError as exc:
+                if not self.closing and self.monitoring:
+                    self.hud.update_text(str(exc), "ОШИБКА ЗАХВАТА")
+            except Exception:  # noqa: BLE001 - isolate the capture boundary
+                if not self.closing and self.monitoring:
+                    self.hud.update_text("Ошибка захвата звука.", "ОШИБКА ЗАХВАТА")
+            was_stopping = self.capture_stop is not None and self.capture_stop.is_set()
+            self.monitoring = False
+            self.capture_future = None
+            self.capture_stop = None
+            if was_stopping and self.tasks.state is State.IDLE and not self.closing:
+                self.hud.update_text(status="ГОТОВО")
+
+        if self.segments and not self.closing:
+            dropped = self.segments.take_overflow()
+            if dropped:
+                self.lost_segments += dropped
+                self.hud.update_text(
+                    f"Очередь аудио заполнена. Пропущено сегментов: {self.lost_segments}.",
+                    "ОШИБКА ОЧЕРЕДИ",
+                )
+            if self.lost_segments:
+                self.hud.update_text(
+                    status=f"VAD · ПРОПУЩЕНО СЕГМЕНТОВ: {self.lost_segments}"
+                )
+            if self.tasks.state is State.IDLE and self.future is None:
+                segment = self.segments.get()
+                if segment is not None:
+                    print(f"[metrics] vad_silence_ms={segment[2]}", file=sys.stderr)
+                    task = self.tasks.begin(State.PROCESSING)
+                    self.submit(task, audio=True, audio_data=segment[1])
+                elif not self.monitoring and self.capture_future is None:
+                    self.segments.close()
+                    self.segments = None
+
+        if self.closing and self.future is None and self.capture_future is None:
             self.hud.root.destroy()
         else:
             self.hud.root.after(25, self.poll)
@@ -399,6 +507,7 @@ class GhostAssistApp:
         finally:
             self.close()
             self.worker.shutdown(wait=True)
+            self.capture_worker.shutdown(wait=True)
 
 
 def main():

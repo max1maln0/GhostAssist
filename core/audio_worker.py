@@ -2,15 +2,73 @@
 
 import audioop
 import io
-import sys
 import threading
 import time
 import wave
 from array import array
+from collections import deque
+from uuid import uuid4
 
 
 class AudioError(RuntimeError):
     pass
+
+
+class SegmentQueue:
+    """Bounded FIFO with monotonically numbered capture events."""
+
+    def __init__(self, max_bytes, max_segments=4):
+        self.max_bytes = max_bytes
+        self.max_segments = max_segments
+        self._items = deque()
+        self._bytes = 0
+        self._session_id = uuid4()
+        self._last_id = 0
+        self._dropped = 0
+        self._closed = False
+        self._lock = threading.Lock()
+
+    def put(self, segment_id, wav, silence_ms=0):
+        with self._lock:
+            if self._closed or segment_id <= self._last_id:
+                return False
+            self._last_id = segment_id
+            if (
+                len(self._items) >= self.max_segments
+                or self._bytes + len(wav) > self.max_bytes
+            ):
+                self._dropped += 1
+                return False
+            self._items.append(((self._session_id, segment_id), wav, silence_ms))
+            self._bytes += len(wav)
+            return True
+
+    def get(self):
+        with self._lock:
+            if not self._items:
+                return None
+            segment = self._items.popleft()
+            self._bytes -= len(segment[1])
+            return segment
+
+    def take_overflow(self):
+        with self._lock:
+            count, self._dropped = self._dropped, 0
+            return count
+
+    def close(self):
+        with self._lock:
+            self._closed = True
+            self._items.clear()
+            self._bytes = 0
+
+
+def _wav_bytes(pcm, channels, rate):
+    with io.BytesIO() as buffer:
+        with wave.open(buffer, "wb") as wav:
+            wav.setparams((channels, 2, rate, 0, "NONE", "not compressed"))
+            wav.writeframes(pcm)
+        return buffer.getvalue()
 
 
 def list_loopback_devices():
@@ -32,6 +90,7 @@ def record_wav(
     max_bytes: int,
     device_name: str = "",
     vad_options=None,
+    on_segment=None,
 ) -> bytes:
     import pyaudiowpatch as audio
 
@@ -59,23 +118,29 @@ def record_wav(
                 raise AudioError("Неверный формат устройства WASAPI.")
             segmenter = None
             resample_state = None
+            segment_id = 0
             if vad_options:
                 import webrtcvad
 
                 from core.vad import VoiceSegmenter
 
-                segmenter = VoiceSegmenter(
-                    webrtcvad.Vad(vad_options["sensitivity"]),
-                    min_speech_ms=vad_options["min_speech_ms"],
-                    silence_ms=vad_options["silence_ms"],
-                    max_seconds=min(vad_options["max_seconds"], max_bytes / 32000),
-                )
+                detector = webrtcvad.Vad(vad_options["sensitivity"])
+
+                def new_segmenter():
+                    return VoiceSegmenter(
+                        detector,
+                        min_speech_ms=vad_options["min_speech_ms"],
+                        silence_ms=vad_options["silence_ms"],
+                        max_seconds=min(vad_options["max_seconds"], max_bytes / 32000),
+                    )
+
+                segmenter = new_segmenter()
             frame_size = channels * 2
             limit = min(max_bytes, int(seconds * rate) * frame_size)
             limit -= limit % frame_size
 
             def on_audio(data, frames, timing, flags):
-                nonlocal resample_state
+                nonlocal resample_state, segmenter, segment_id
                 with lock:
                     if stop.is_set() or cancel.is_set() or complete.is_set():
                         return None, audio.paComplete
@@ -97,13 +162,19 @@ def record_wav(
                             mono, 2, 1, rate, 16000, resample_state
                         )
                         segmenter.feed(mono)
-                        if segmenter.done:
-                            print(
-                                f"[metrics] vad_silence_ms={segmenter.silent * 30}",
-                                file=sys.stderr,
+                        while segmenter.done:
+                            if on_segment is None:
+                                complete.set()
+                                return None, audio.paComplete
+                            segment_id += 1
+                            on_segment(
+                                segment_id,
+                                _wav_bytes(segmenter.result(), 1, 16000),
+                                segmenter.silent * 30,
                             )
-                            complete.set()
-                            return None, audio.paComplete
+                            remaining_pcm = bytes(segmenter.pending)
+                            segmenter = new_segmenter()
+                            segmenter.feed(remaining_pcm)
                         return None, audio.paContinue
                     remaining = limit - len(pcm)
                     pcm.extend(data[:remaining])
@@ -132,7 +203,9 @@ def record_wav(
                         raise AudioError("Устройство воспроизведения отключилось.")
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        if segmenter is not None and not segmenter.active:
+                        if on_segment is not None or (
+                            segmenter is not None and not segmenter.active
+                        ):
                             deadline = time.monotonic() + seconds
                             continue
                         break
@@ -144,7 +217,7 @@ def record_wav(
     except (OSError, RuntimeError, ValueError, KeyError, OverflowError):
         raise AudioError("Не удалось записать звук с устройства WASAPI.") from None
 
-    if cancel.is_set():
+    if cancel.is_set() or on_segment is not None:
         return b""
     if segmenter is not None:
         pcm = segmenter.result()
@@ -152,8 +225,4 @@ def record_wav(
         rate = 16000
     if not pcm:
         raise AudioError("Запись пуста. Включите воспроизведение и повторите.")
-    with io.BytesIO() as buffer:
-        with wave.open(buffer, "wb") as wav:
-            wav.setparams((channels, 2, rate, 0, "NONE", "not compressed"))
-            wav.writeframes(pcm)
-        return buffer.getvalue()
+    return _wav_bytes(pcm, channels, rate)

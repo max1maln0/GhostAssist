@@ -12,6 +12,7 @@ class AppTests(unittest.TestCase):
         with patch("main.StealthHUD"):
             self.app = main.GhostAssistApp(Settings(_env_file=None))
         self.addCleanup(self.app.worker.shutdown)
+        self.addCleanup(self.app.capture_worker.shutdown)
 
     def test_audio_toggle_blocks_screen_and_updates_hud(self):
         entered = threading.Event()
@@ -140,7 +141,9 @@ class AppTests(unittest.TestCase):
         self.app.settings.vad_enabled = True
         entered = threading.Event()
 
-        def record(stop, cancel, seconds, max_bytes, device, vad_options=None):
+        def record(
+            stop, cancel, seconds, max_bytes, device, vad_options=None, on_segment=None
+        ):
             self.assertEqual(vad_options["sensitivity"], 2)
             entered.set()
             cancel.wait(2)
@@ -150,7 +153,7 @@ class AppTests(unittest.TestCase):
             with patch.object(self.app.llm, "transcribe") as transcribe:
                 self.app.audio()
                 self.assertTrue(entered.wait(2))
-                future = self.app.future
+                future = self.app.capture_future
                 self.app.cancel()
                 future.result(timeout=2)
                 self.app.poll()
@@ -160,26 +163,58 @@ class AppTests(unittest.TestCase):
 
     def test_vad_segment_reaches_transcription_review(self):
         self.app.settings.vad_enabled = True
-        with patch("main.record_wav", return_value=b"vad wav") as record:
+        emitted = threading.Event()
+
+        def record(
+            stop, cancel, seconds, max_bytes, device, vad_options=None, on_segment=None
+        ):
+            on_segment(1, b"vad wav")
+            emitted.set()
+            stop.wait(2)
+            return b""
+
+        with patch("main.record_wav", side_effect=record):
             with patch.object(
                 self.app.llm, "transcribe", return_value="речь"
             ) as transcribe:
                 with patch.object(self.app, "show_transcript") as review:
                     self.app.audio()
+                    self.assertTrue(emitted.wait(2))
+                    self.app.poll()
                     self.app.future.result(timeout=2)
                     self.app.poll()
                     self.assertIs(self.app.tasks.state, State.REVIEW)
-                    self.assertIsNotNone(record.call_args.kwargs["vad_options"])
                     self.assertEqual(transcribe.call_args.args[0], b"vad wav")
                     review.assert_called_once()
+                    self.app.cancel()
+                    self.app.capture_future.result(timeout=2)
 
     def test_same_vad_transcript_is_shown_again(self):
         self.app.settings.vad_enabled = True
-        with patch("main.record_wav", return_value=b"vad wav"):
+        emitted = threading.Event()
+
+        def record(
+            stop, cancel, seconds, max_bytes, device, vad_options=None, on_segment=None
+        ):
+            on_segment(1, b"one")
+            on_segment(2, b"two")
+            emitted.set()
+            stop.wait(2)
+            return b""
+
+        with patch("main.record_wav", side_effect=record):
             with patch.object(self.app.llm, "transcribe", return_value="Повтор"):
                 with patch.object(self.app, "show_transcript") as review:
                     self.app.audio()
+                    self.assertTrue(emitted.wait(2))
+                    self.app.poll()
                     self.app.future.result(timeout=2)
                     self.app.poll()
-                    review.assert_called_once()
                     self.assertIs(self.app.tasks.state, State.REVIEW)
+                    self.app.tasks.finish(self.app.tasks.active)
+                    self.app.poll()
+                    self.app.future.result(timeout=2)
+                    self.app.poll()
+                    self.assertEqual(review.call_count, 2)
+                    self.app.cancel()
+                    self.app.capture_future.result(timeout=2)
