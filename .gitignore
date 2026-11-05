@@ -20,3 +20,5 @@ env/
 *.wav
 *.jpg
 *.png
+# Static analysis cache
+.ruff_cache/
