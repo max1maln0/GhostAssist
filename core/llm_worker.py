@@ -1,5 +1,6 @@
 import asyncio
 import io
+import wave
 from contextlib import aclosing
 
 import httpx
@@ -40,7 +41,7 @@ class LLMWorker:
             image.save(buffer, format="JPEG", quality=75)
             return buffer.getvalue()
 
-    async def _generate(self, data, mime_type, prompt, publish, history):
+    async def _generate(self, data, mime_type, prompt, publish, history, instruction):
         options = types.HttpOptions(
             timeout=int(self.settings.request_timeout * 1000),
             retry_options=types.HttpRetryOptions(attempts=1),
@@ -60,7 +61,14 @@ class LLMWorker:
                     try:
                         return await asyncio.wait_for(
                             self._stream(
-                                api, model, data, mime_type, prompt, publish, history
+                                api,
+                                model,
+                                data,
+                                mime_type,
+                                prompt,
+                                publish,
+                                history,
+                                instruction,
                             ),
                             self.settings.request_timeout,
                         )
@@ -104,12 +112,15 @@ class LLMWorker:
         finally:
             client.close()
 
-    async def _stream(self, api, model, data, mime_type, prompt, publish, history):
-        instruction = (
-            "Ответь на вопрос из аудио."
-            if mime_type == "audio/wav"
-            else "Ответь на вопрос с изображения."
-        )
+    async def _stream(
+        self, api, model, data, mime_type, prompt, publish, history, instruction
+    ):
+        if instruction is None:
+            instruction = (
+                "Ответь на вопрос из аудио."
+                if mime_type == "audio/wav"
+                else "Ответь на вопрос с изображения."
+            )
         contents = []
         for item in history:
             contents.extend(
@@ -126,7 +137,9 @@ class LLMWorker:
             types.Content(
                 role="user",
                 parts=[
-                    types.Part.from_bytes(data=data, mime_type=mime_type),
+                    types.Part.from_text(text=data.decode("utf-8"))
+                    if mime_type == "text/plain"
+                    else types.Part.from_bytes(data=data, mime_type=mime_type),
                     types.Part.from_text(text=instruction),
                 ],
             )
@@ -159,7 +172,16 @@ class LLMWorker:
         return answer
 
     def generate(
-        self, data, mime_type, prompt, publish, cancel, *, budget=None, history=()
+        self,
+        data,
+        mime_type,
+        prompt,
+        publish,
+        cancel,
+        *,
+        budget=None,
+        history=(),
+        instruction=None,
     ):
         async def run():
             if cancel.is_set():
@@ -168,7 +190,7 @@ class LLMWorker:
             if timeout <= 0:
                 raise GenerationError("Превышено общее время обработки.")
             task = asyncio.create_task(
-                self._generate(data, mime_type, prompt, publish, history)
+                self._generate(data, mime_type, prompt, publish, history, instruction)
             )
             loop = asyncio.get_running_loop()
             deadline = loop.time() + timeout
@@ -187,3 +209,20 @@ class LLMWorker:
                 await asyncio.gather(task, return_exceptions=True)
 
         return asyncio.run(run())
+
+    def transcribe(self, data, cancel, *, budget=None):
+        try:
+            with wave.open(io.BytesIO(data), "rb") as audio:
+                if audio.getnframes() <= 0 or audio.getsampwidth() != 2:
+                    raise ValueError("empty or unsupported audio")
+        except (wave.Error, EOFError, ValueError):
+            raise GenerationError("Некорректная или пустая аудиозапись.") from None
+        return self.generate(
+            data,
+            "audio/wav",
+            "Точно транскрибируй речь на исходном языке. Верни только произнесённый текст.",
+            lambda _: None,
+            cancel,
+            budget=budget,
+            instruction="Распознай речь. Сохрани язык и слова говорящего.",
+        )

@@ -219,6 +219,25 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(inline.get("mimeType", inline.get("mime_type")), "audio/wav")
         self.assertEqual(inline["data"], "d2F2")
 
+    def test_transcription_validates_wav_and_uses_stream(self):
+        worker = LLMWorker(Settings(_env_file=None, gemini_api_key="test"))
+        cancel = threading.Event()
+        for invalid in (b"", b"not wav"):
+            with self.assertRaises(GenerationError):
+                worker.transcribe(invalid, cancel)
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as audio:
+            audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            audio.writeframes(b"\0\0" * 320)
+        fake = FakeGemini([[chunk("Распознанный текст", "STOP")]])
+        with patch("core.llm_worker.genai.Client", return_value=fake):
+            self.assertEqual(
+                worker.transcribe(buffer.getvalue(), cancel), "Распознанный текст"
+            )
+        self.assertEqual(
+            fake.calls[0]["contents"][0].parts[0].inline_data.mime_type, "audio/wav"
+        )
+
     def test_fallback_clears_partial_and_sends_wav(self):
         fake = FakeGemini(
             [[chunk("old"), errors.ServerError(503, {})], [chunk("new", "STOP")]]
