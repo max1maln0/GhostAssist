@@ -90,7 +90,7 @@ def record_wav(
                         segmenter.feed(mono)
                         if segmenter.done:
                             print(
-                                f"[metrics] vad_silence_ms={vad_options['silence_ms']}",
+                                f"[metrics] vad_silence_ms={segmenter.silent * 30}",
                                 file=sys.stderr,
                             )
                             complete.set()

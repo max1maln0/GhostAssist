@@ -19,6 +19,14 @@ class VoiceTests(unittest.TestCase):
         self.assertTrue(vad.done)
         self.assertTrue(vad.result())
 
+    def test_real_webrtc_silence(self):
+        import webrtcvad
+
+        vad = VoiceSegmenter(webrtcvad.Vad(2))
+        vad.feed(bytes(32000))
+        self.assertFalse(vad.active)
+        self.assertEqual(vad.result(), b"")
+
     def test_max_length_and_repeated_input(self):
         vad = VoiceSegmenter(Detector(), min_speech_ms=30, max_seconds=0.12)
         vad.feed(bytes([1]) * 960 * 100)

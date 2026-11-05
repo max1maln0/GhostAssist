@@ -281,13 +281,17 @@ class GhostAssistApp:
                             _, mode, generation = self.session_task
                             question, separator, answer = result.partition("Ответ:")
                             if separator and question.strip().startswith("Вопрос:"):
-                                self.sessions.add(
-                                    mode,
+                                question = (
                                     self.session_question
-                                    or question.removeprefix("Вопрос:"),
-                                    answer,
-                                    generation,
-                                    task.cancel,
+                                    or question.removeprefix("Вопрос:")
+                                )
+                            elif self.session_question:
+                                question, answer = self.session_question, result
+                            else:
+                                question, answer = "", ""
+                            if question and answer:
+                                self.sessions.add(
+                                    mode, question, answer, generation, task.cancel
                                 )
                         if self.managed:
                             test_count = len(self.sessions.snapshot("TEST")[1])
