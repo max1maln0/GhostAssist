@@ -31,8 +31,6 @@ class GhostAssistApp:
         self.session_question = None
         self.task_started = None
         self.monitoring = False
-        self.last_transcript = None
-        self.last_transcript_at = 0.0
         self.managed = False
         self.commands = Queue(maxsize=32)
         self.worker = ThreadPoolExecutor(max_workers=1)
@@ -272,26 +270,8 @@ class GhostAssistApp:
                 try:
                     result = self.future.result()
                     if not task.cancel.is_set() and isinstance(result, tuple):
-                        transcript = result[1]
-                        now = monotonic()
-                        duplicate = (
-                            self.monitoring
-                            and transcript
-                            and self.last_transcript
-                            and transcript.strip().casefold() == self.last_transcript
-                            and now - self.last_transcript_at < 10
-                        )
-                        if duplicate:
-                            self.hud.update_text(
-                                "Повторная реплика пропущена.", "ГОТОВО"
-                            )
-                            self.hud.root.after(0, self.audio)
-                        else:
-                            self.show_transcript(task, transcript)
-                            task.state = State.REVIEW
-                            if self.monitoring:
-                                self.last_transcript = transcript.strip().casefold()
-                                self.last_transcript_at = now
+                        self.show_transcript(task, result[1])
+                        task.state = State.REVIEW
                     elif not task.cancel.is_set():
                         if (
                             self.settings.memory_enabled
@@ -368,7 +348,6 @@ class GhostAssistApp:
         self.closing = True
         self.cancel()
         self.sessions.close()
-        self.last_transcript = None
         for listener in self.listeners:
             listener.stop()
 

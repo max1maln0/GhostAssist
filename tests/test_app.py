@@ -173,17 +173,13 @@ class AppTests(unittest.TestCase):
                     self.assertEqual(transcribe.call_args.args[0], b"vad wav")
                     review.assert_called_once()
 
-    def test_duplicate_vad_transcript_is_not_submitted_twice(self):
-        from time import monotonic
-
+    def test_same_vad_transcript_is_shown_again(self):
         self.app.settings.vad_enabled = True
-        self.app.last_transcript = "повтор"
-        self.app.last_transcript_at = monotonic()
         with patch("main.record_wav", return_value=b"vad wav"):
             with patch.object(self.app.llm, "transcribe", return_value="Повтор"):
                 with patch.object(self.app, "show_transcript") as review:
                     self.app.audio()
                     self.app.future.result(timeout=2)
                     self.app.poll()
-                    review.assert_not_called()
-                    self.assertIs(self.app.tasks.state, State.IDLE)
+                    review.assert_called_once()
+                    self.assertIs(self.app.tasks.state, State.REVIEW)
