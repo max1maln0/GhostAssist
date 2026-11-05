@@ -20,6 +20,7 @@ from config.env_file import update_env
 from config.settings import Settings, profile_path, validate_hotkeys
 from core.audio_worker import AudioError, record_wav
 from core.llm_worker import GenerationError, LLMWorker
+from core.session_manager import Interaction
 from core.task_state import State, TaskState
 
 
@@ -261,6 +262,23 @@ class GeminiTests(unittest.TestCase):
         inline = payload["contents"][0]["parts"][0]["inlineData"]
         self.assertEqual(inline.get("mimeType", inline.get("mime_type")), "audio/wav")
         self.assertEqual(inline["data"], "d2F2")
+
+    def test_history_is_sent_as_user_and_model_messages(self):
+        worker = LLMWorker(Settings(_env_file=None, gemini_api_key="test"))
+        fake = FakeGemini([[chunk("готово", "STOP")]])
+        with patch("core.llm_worker.genai.Client", return_value=fake):
+            worker.generate(
+                b"jpg",
+                "image/jpeg",
+                "prompt",
+                lambda _: None,
+                threading.Event(),
+                history=(Interaction("прошлый вопрос", "прошлый ответ"),),
+            )
+        messages = fake.calls[0]["contents"]
+        self.assertEqual([item.role for item in messages], ["user", "model", "user"])
+        self.assertEqual(messages[0].parts[0].text, "прошлый вопрос")
+        self.assertEqual(messages[1].parts[0].text, "прошлый ответ")
 
     def test_transcription_validates_wav_and_uses_stream(self):
         worker = LLMWorker(Settings(_env_file=None, gemini_api_key="test"))

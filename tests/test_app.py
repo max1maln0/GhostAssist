@@ -135,3 +135,40 @@ class AppTests(unittest.TestCase):
                 future.result(timeout=2)
                 self.app.poll()
                 self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
+
+    def test_vad_recording_reaches_transcription_and_can_be_cancelled(self):
+        self.app.settings.vad_enabled = True
+        entered = threading.Event()
+
+        def record(stop, cancel, seconds, max_bytes, device, vad_options=None):
+            self.assertEqual(vad_options["sensitivity"], 2)
+            entered.set()
+            cancel.wait(2)
+            return b""
+
+        with patch("main.record_wav", side_effect=record):
+            with patch.object(self.app.llm, "transcribe") as transcribe:
+                self.app.audio()
+                self.assertTrue(entered.wait(2))
+                future = self.app.future
+                self.app.cancel()
+                future.result(timeout=2)
+                self.app.poll()
+                transcribe.assert_not_called()
+                self.assertFalse(self.app.monitoring)
+                self.assertIs(self.app.tasks.state, State.IDLE)
+
+    def test_vad_segment_reaches_transcription_review(self):
+        self.app.settings.vad_enabled = True
+        with patch("main.record_wav", return_value=b"vad wav") as record:
+            with patch.object(
+                self.app.llm, "transcribe", return_value="речь"
+            ) as transcribe:
+                with patch.object(self.app, "show_transcript") as review:
+                    self.app.audio()
+                    self.app.future.result(timeout=2)
+                    self.app.poll()
+                    self.assertIs(self.app.tasks.state, State.REVIEW)
+                    self.assertIsNotNone(record.call_args.kwargs["vad_options"])
+                    self.assertEqual(transcribe.call_args.args[0], b"vad wav")
+                    review.assert_called_once()

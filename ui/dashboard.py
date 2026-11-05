@@ -663,6 +663,7 @@ class DashboardApp(ctk.CTk):
             if code is not None:
                 process.stdin.close()
                 self.assistant_process = None
+                self.session_status.configure(text="Сессия  TEST 0 · INTERVIEW 0")
                 self.stopping_until = None
                 self.run_btn.configure(state="normal")
                 self._show_status(
