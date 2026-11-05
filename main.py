@@ -1,4 +1,5 @@
 import ctypes
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from queue import Empty, Full, Queue
@@ -225,7 +226,10 @@ class GhostAssistApp:
             if managed:
 
                 def watch_parent():
-                    sys.stdin.readline()
+                    try:
+                        os.read(sys.stdin.fileno(), 1)
+                    except OSError:
+                        pass
                     self.enqueue(self.close)
 
                 Thread(target=watch_parent, daemon=True).start()
@@ -246,7 +250,11 @@ def main():
             print("Укажите ключ Gemini в Dashboard или .env.", file=sys.stderr)
             return 2
         # Tk and MSS must see the same physical desktop coordinates.
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+        set_dpi_context = getattr(
+            ctypes.windll.user32, "SetProcessDpiAwarenessContext", None
+        )
+        if set_dpi_context is None or not set_dpi_context(ctypes.c_void_p(-4)):
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
         GhostAssistApp(settings).run("--managed" in sys.argv)
         return 0
     except KeyboardInterrupt:
