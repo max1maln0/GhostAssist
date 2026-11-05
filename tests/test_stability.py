@@ -17,7 +17,7 @@ from google.genai import errors, types
 from pydantic import ValidationError
 
 from config.env_file import update_env
-from config.settings import Settings, profile_path
+from config.settings import Settings, profile_path, validate_hotkeys
 from core.audio_worker import AudioError, record_wav
 from core.llm_worker import GenerationError, LLMWorker
 from core.task_state import State, TaskState
@@ -286,6 +286,22 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(Settings(_env_file=env).crop_width, 900)
             with self.assertRaises(ValidationError):
                 Settings(_env_file=None, audio_max_seconds=61)
+
+    def test_windows_shortcuts_and_legacy_cancel(self):
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings(_env_file=None, hotkey_cancel="<alt>+<esc>")
+            self.assertEqual(settings.hotkey_cancel, "<ctrl>+<shift>+<f12>")
+            validate_hotkeys(settings)
+            for combo in (
+                "<alt>+<esc>",
+                "<alt>+<tab>",
+                "<alt>+<f4>",
+                "<ctrl>+<shift>+<esc>",
+                "<cmd>+d",
+                "<cmd>+l",
+            ):
+                with self.subTest(combo=combo), self.assertRaises(ValueError):
+                    validate_hotkeys(settings, {"hotkey_screen": combo})
 
     def test_profiles_reject_traversal_and_reserved_names(self):
         for name in (

@@ -351,7 +351,7 @@ class DashboardApp(ctk.CTk):
                 validate_hotkeys(self.settings, {env_key.lower(): combo})
             except ValueError:
                 messagebox.showwarning(
-                    "Хоткей", "Комбинация недоступна или уже назначена."
+                    "Хоткей", "Комбинация системная, недоступна или уже назначена."
                 )
                 return "break"
             if self._save(**{env_key: combo}):

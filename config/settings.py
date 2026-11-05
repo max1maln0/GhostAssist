@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     hotkey_mode: str = "<alt>+m"
     hotkey_hud: str = "<alt>+x"
     hotkey_dock: str = "<alt>+<down>"
-    hotkey_cancel: str = "<alt>+<esc>"
+    hotkey_cancel: str = "<ctrl>+<shift>+<f12>"
     hotkey_page_up: str = "<alt>+<page_up>"
     hotkey_page_down: str = "<alt>+<page_down>"
 
@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     @classmethod
     def check_profile(cls, value):
         profile_path(value)
+        return value
+
+    @field_validator("hotkey_cancel")
+    @classmethod
+    def migrate_legacy_cancel(cls, value):
+        if value.lower().replace(" ", "") == "<alt>+<esc>":
+            return "<ctrl>+<shift>+<f12>"
         return value
 
     @property
@@ -68,13 +75,40 @@ class Settings(BaseSettings):
 def validate_hotkeys(settings, overrides=None):
     from pynput.keyboard import HotKey, Key
 
+    blocked_combinations = (
+        "<alt>+<esc>",
+        "<alt>+<tab>",
+        "<alt>+<f4>",
+        "<ctrl>+<shift>+<esc>",
+        "<ctrl>+<alt>+<delete>",
+        "<cmd>+d",
+        "<cmd>+l",
+        "<cmd>+<tab>",
+        "<cmd>+r",
+    )
+    aliases = {
+        Key.alt_l: Key.alt,
+        Key.alt_r: Key.alt,
+        Key.ctrl_l: Key.ctrl,
+        Key.ctrl_r: Key.ctrl,
+        Key.shift_l: Key.shift,
+        Key.shift_r: Key.shift,
+        Key.cmd_l: Key.cmd,
+        Key.cmd_r: Key.cmd,
+    }
+    blocked = [
+        frozenset(aliases.get(key, key) for key in HotKey.parse(combo))
+        for combo in blocked_combinations
+    ]
     seen = set()
     for name in Settings.model_fields:
         if not name.startswith("hotkey_"):
             continue
         value = (overrides or {}).get(name, getattr(settings, name))
-        keys = frozenset(HotKey.parse(value))
+        keys = frozenset(aliases.get(key, key) for key in HotKey.parse(value))
         modifiers = {Key.alt, Key.ctrl, Key.shift, Key.cmd}
+        if any(combo <= keys for combo in blocked):
+            raise ValueError("Системное сочетание Windows недоступно для назначения.")
         if not keys - modifiers or keys in seen:
             raise ValueError(
                 "Хоткеи должны быть различными и включать обычную клавишу."
