@@ -37,6 +37,7 @@ class GhostAssistApp:
         self.capture_worker = ThreadPoolExecutor(max_workers=1)
         self.capture_future = None
         self.capture_stop = None
+        self.capture_error = None
         self.segments = None
         self.lost_segments = 0
         self.future = None
@@ -99,6 +100,7 @@ class GhostAssistApp:
             ):
                 return
             self.monitoring = True
+            self.capture_error = None
             self.lost_segments = 0
             self.capture_stop = Event()
             max_bytes = self.settings.audio_max_mib * 1024 * 1024
@@ -276,6 +278,7 @@ class GhostAssistApp:
 
     def cancel(self):
         self.monitoring = False
+        self.capture_error = None
         if self.capture_stop:
             self.capture_stop.set()
         if self.segments:
@@ -412,10 +415,12 @@ class GhostAssistApp:
                 self.capture_future.result()
             except AudioError as exc:
                 if not self.closing and self.monitoring:
-                    self.hud.update_text(str(exc), "ОШИБКА ЗАХВАТА")
+                    self.capture_error = str(exc)
+                    self.hud.update_text(self.capture_error, "ОШИБКА ЗАХВАТА")
             except Exception:  # noqa: BLE001 - isolate the capture boundary
                 if not self.closing and self.monitoring:
-                    self.hud.update_text("Ошибка захвата звука.", "ОШИБКА ЗАХВАТА")
+                    self.capture_error = "Ошибка захвата звука."
+                    self.hud.update_text(self.capture_error, "ОШИБКА ЗАХВАТА")
             was_stopping = self.capture_stop is not None and self.capture_stop.is_set()
             self.monitoring = False
             self.capture_future = None
@@ -431,10 +436,6 @@ class GhostAssistApp:
                     f"Очередь аудио заполнена. Пропущено сегментов: {self.lost_segments}.",
                     "ОШИБКА ОЧЕРЕДИ",
                 )
-            if self.lost_segments:
-                self.hud.update_text(
-                    status=f"VAD · ПРОПУЩЕНО СЕГМЕНТОВ: {self.lost_segments}"
-                )
             if self.tasks.state is State.IDLE and self.future is None:
                 segment = self.segments.get()
                 if segment is not None:
@@ -444,6 +445,14 @@ class GhostAssistApp:
                 elif not self.monitoring and self.capture_future is None:
                     self.segments.close()
                     self.segments = None
+
+        alerts = []
+        if self.capture_error:
+            alerts.append(f"ОШИБКА ЗАХВАТА: {self.capture_error}")
+        if self.lost_segments and self.segments is not None:
+            alerts.append(f"ПРОПУЩЕНО СЕГМЕНТОВ: {self.lost_segments}")
+        if alerts and not self.closing:
+            self.hud.update_text(status=" · ".join(alerts))
 
         if self.closing and self.future is None and self.capture_future is None:
             self.hud.root.destroy()
