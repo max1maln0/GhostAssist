@@ -122,7 +122,8 @@ Dashboard показывает количество завершённых вз�
 | --- | --- |
 | `main.py`, `core/task_state.py` | Хоткеи, очередь команд Tk, состояния задач и завершение |
 | `core/audio_worker.py` | Захват WASAPI и сборка WAV |
-| `core/llm_worker.py` | MSS/JPEG, поток Gemini, резервные модели и тайм-ауты |
+| `core/llm_worker.py`, `core/provider_contracts.py` | Захват MSS/JPEG, совместимый фасад и независимые контракты AI |
+| `providers/gemini.py`, `providers/gemini_client.py` | Поток Gemini, транскрипция, резервные модели и тайм-ауты |
 | `core/context_manager.py` | Режимы и инструкции с профилем |
 | `core/session_manager.py` | Ограниченная история взаимодействий в памяти |
 | `core/vad.py` | Определение границ речевых фрагментов |
