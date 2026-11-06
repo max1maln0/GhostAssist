@@ -42,6 +42,26 @@ class AppTests(unittest.TestCase):
                     self.assertEqual(transcribe.call_args.args[0], b"wav")
                     capture.assert_called_once()
 
+    def test_one_hundred_sequential_mock_requests_keep_state_bounded(self):
+        with (
+            patch.object(self.app.llm, "capture_screen", return_value=b"jpg"),
+            patch.object(
+                self.app.llm,
+                "generate",
+                return_value="Вопрос: Вопрос?\nОтвет: Ответ",
+            ) as generate,
+        ):
+            for _ in range(100):
+                self.app.capture()
+                self.app.future.result(timeout=2)
+                self.app.poll()
+                self.assertIs(self.app.tasks.state, State.IDLE)
+            self.assertEqual(generate.call_count, 100)
+            self.assertLessEqual(
+                len(self.app.sessions.snapshot("TEST")[1]),
+                self.app.settings.memory_depth,
+            )
+
     def test_cancel_drops_result_even_if_worker_returns_success(self):
         entered = threading.Event()
 
