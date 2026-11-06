@@ -110,6 +110,28 @@ class BackgroundTests(unittest.TestCase):
         app._stop_process.assert_not_called()
         app._replace_dashboard_hotkey.assert_called_once_with(listener)
 
+    def test_service_hotkey_and_profile_changes_schedule_managed_restart(self):
+        initial = Settings(_env_file=None)
+        for values in ({"HOTKEY_SCREEN": "<alt>+z"}, {"ACTIVE_PROFILE": "other.md"}):
+            with self.subTest(values=values):
+                process = Mock()
+                process.poll.return_value = None
+                app = SimpleNamespace(
+                    settings=initial,
+                    assistant_process=process,
+                    restart_pending=False,
+                    _stop_process=Mock(),
+                )
+                with (
+                    patch.dict(os.environ, {}, clear=True),
+                    patch("ui.dashboard.Settings", return_value=initial),
+                    patch("ui.dashboard.validate_hotkeys"),
+                    patch("ui.dashboard.update_env"),
+                ):
+                    self.assertTrue(DashboardApp._save(app, **values))
+                self.assertTrue(app.restart_pending)
+                app._stop_process.assert_called_once()
+
     def test_hotkey_registration_failure_does_not_save(self):
         initial = SimpleNamespace(hotkey_dashboard="<ctrl>+<shift>+<f9>")
         candidate = SimpleNamespace(hotkey_dashboard="<alt>+<home>")
