@@ -45,7 +45,7 @@ class VerifiedGlobalHotKeys(keyboard.GlobalHotKeys):
                         elif msg.message in self._WM_NOTIFICATIONS:
                             self._on_notification(msg.message, msg.wParam, msg.lParam)
         except Exception:  # noqa: BLE001 - failure is reported without sensitive details
-            pass
+            self.hook_installed = False
         finally:
             self.hook_ready.set()
 
