@@ -75,3 +75,29 @@ class OrchestratorTests(unittest.TestCase):
         self.orchestrator.start(lambda *_: 1 / 0, 1)
         self.wait_terminal()
         self.assertEqual(self.orchestrator.drain()[-1].error.code, "handler")
+
+    def test_unread_terminal_event_cannot_be_overwritten(self):
+        self.orchestrator.prepare(TaskRequest("q", "text/plain"))
+        self.orchestrator.start(lambda *_: "answer", 1)
+        self.wait_terminal()
+        self.orchestrator._future.result(1)
+        with self.assertRaisesRegex(RuntimeError, "consumed"):
+            self.orchestrator.prepare(TaskRequest("next", "text/plain"))
+        self.assertEqual(self.orchestrator.drain()[-1].status, TaskStatus.COMPLETED)
+        self.orchestrator.prepare(TaskRequest("next", "text/plain"))
+
+    def test_close_reports_unfinished_worker(self):
+        entered, release = threading.Event(), threading.Event()
+        self.orchestrator.prepare(TaskRequest("q", "text/plain"))
+
+        def work(*_):
+            entered.set()
+            release.wait(1)
+            return "stale"
+
+        self.orchestrator.start(work, 2)
+        self.assertTrue(entered.wait(1))
+        self.assertFalse(self.orchestrator.close(timeout=0.01))
+        release.set()
+        self.orchestrator._future.result(1)
+        self.assertTrue(self.orchestrator.close(timeout=0.1))

@@ -1,7 +1,7 @@
 """Bounded, GUI-independent task execution with cooperative cancellation."""
 
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from enum import Enum
 from threading import Lock, Timer
 from typing import Callable, Protocol
@@ -51,12 +51,21 @@ class TaskOrchestrator:
         with self._lock:
             return self._state
 
+    @property
+    def busy(self):
+        with self._lock:
+            return self._state in (Lifecycle.CREATED, Lifecycle.RUNNING) or bool(
+                self._future and not self._future.done()
+            )
+
     def prepare(self, request: TaskRequest):
         with self._lock:
             if self._closed or (self._future and not self._future.done()):
                 raise RuntimeError("executor is busy or closed")
             if self._state in (Lifecycle.CREATED, Lifecycle.RUNNING):
                 raise RuntimeError("task is already active")
+            if self._events:
+                raise RuntimeError("previous events must be consumed")
             self._request = request
             self._token = CancellationSignal()
             self._state = Lifecycle.CREATED
@@ -118,6 +127,7 @@ class TaskOrchestrator:
             if self._state is Lifecycle.RUNNING and self._request.task_id == task_id:
                 self._token.cancel()
                 self._state = Lifecycle.FAILED
+                self._events.clear()
                 self._events.append(
                     TaskEvent(
                         task_id,
@@ -144,8 +154,14 @@ class TaskOrchestrator:
             self._events.clear()
             return events
 
-    def close(self):
+    def close(self, timeout=0.0):
         with self._lock:
             self._closed = True
         self.cancel()
         self._executor.shutdown(wait=False, cancel_futures=True)
+        if self._future is not None:
+            try:
+                self._future.result(timeout=timeout)
+            except TimeoutError:
+                return False
+        return True
