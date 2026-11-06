@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +33,31 @@ class ProfilePersistenceTests(unittest.TestCase):
 
 
 class DashboardRecoveryTests(unittest.TestCase):
+    def test_environment_override_is_not_silently_saved(self):
+        app = SimpleNamespace(settings=Mock())
+        with (
+            patch.dict(os.environ, {"VAD_ENABLED": "true"}),
+            patch("ui.dashboard.messagebox.showerror") as error,
+            patch("ui.dashboard.update_env") as update,
+        ):
+            self.assertFalse(DashboardApp._save(app, VAD_ENABLED="false"))
+        update.assert_not_called()
+        self.assertIn("VAD_ENABLED", error.call_args.args[1])
+
+    def test_profile_selection_does_not_change_editor_when_save_fails(self):
+        app = SimpleNamespace(
+            settings=SimpleNamespace(active_profile="old.md"),
+            profile_selector=Mock(),
+            legend_textbox=Mock(),
+            _save=Mock(return_value=False),
+        )
+        with patch("ui.dashboard.profile_path") as path:
+            path.return_value.read_text.return_value = "new profile"
+            DashboardApp.load_selected_profile(app, "new.md")
+        app.profile_selector.set.assert_called_once_with("old.md")
+        app.legend_textbox.delete.assert_not_called()
+        app.legend_textbox.insert.assert_not_called()
+
     def test_failed_switch_and_selector_save_restores_previous_values(self):
         app = SimpleNamespace(
             settings=SimpleNamespace(vad_enabled=False, audio_device="Headset"),

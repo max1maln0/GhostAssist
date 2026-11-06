@@ -650,12 +650,15 @@ class DashboardApp(ctk.CTk):
         try:
             content = profile_path(name).read_text(encoding="utf-8")
         except (OSError, ValueError):
+            if save:
+                self.profile_selector.set(self.settings.active_profile)
             messagebox.showerror("Профиль", "Не удалось прочитать профиль.")
+            return
+        if save and not self._save(ACTIVE_PROFILE=name):
+            self.profile_selector.set(self.settings.active_profile)
             return
         self.legend_textbox.delete("1.0", "end")
         self.legend_textbox.insert("1.0", content)
-        if save:
-            self._save(ACTIVE_PROFILE=name)
 
     def save_current_legend(self):
         name = self.profile_selector.get()
@@ -762,12 +765,14 @@ class DashboardApp(ctk.CTk):
         prepared = None
         try:
             for key, value in values.items():
-                if (
-                    key.startswith("HOTKEY_")
-                    and key in os.environ
-                    and os.environ[key] != value
-                ):
-                    raise ValueError("Хоткей задан переменной окружения.")
+                if key in os.environ and os.environ[key] != value:
+                    messagebox.showerror(
+                        "Настройки",
+                        f"Параметр {key} задан переменной окружения. "
+                        "Измените или удалите её перед сохранением.",
+                        parent=self,
+                    )
+                    return False
             candidate = Settings(
                 **{key.lower(): value for key, value in values.items()}
             )
