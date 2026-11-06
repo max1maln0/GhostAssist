@@ -162,6 +162,27 @@ class AudioTests(unittest.TestCase):
             self.assertEqual(audio.getnchannels(), 1)
             self.assertGreater(audio.getnframes(), 0)
 
+    def test_vad_callback_error_is_reported_and_resources_closed(self):
+        stop = threading.Event()
+        backend = FakeAudio(b"bad", stop)
+        module = SimpleNamespace(
+            PyAudio=lambda: backend, paInt16=8, paComplete=1, paContinue=0
+        )
+        vad = SimpleNamespace(
+            Vad=lambda _: SimpleNamespace(is_speech=lambda frame, rate: True)
+        )
+        options = {
+            "sensitivity": 2,
+            "min_speech_ms": 30,
+            "silence_ms": 60,
+            "max_seconds": 1,
+        }
+        with patch.dict(sys.modules, pyaudiowpatch=module, webrtcvad=vad):
+            with self.assertRaisesRegex(AudioError, "аудиопотока"):
+                record_wav(stop, threading.Event(), 2, 32000, vad_options=options)
+        self.assertEqual(backend.callback_result, (None, 1))
+        self.assertTrue(backend.closed and backend.terminated)
+
     def test_device_selection_and_missing_device(self):
         stop = threading.Event()
         backend = FakeAudio(b"abcd", stop)

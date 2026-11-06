@@ -97,6 +97,7 @@ def record_wav(
     pcm = bytearray()
     lock = threading.Lock()
     complete = threading.Event()
+    callback_error = threading.Event()
     try:
         with audio.PyAudio() as backend:
             if device_name:
@@ -139,7 +140,7 @@ def record_wav(
             limit = min(max_bytes, int(seconds * rate) * frame_size)
             limit -= limit % frame_size
 
-            def on_audio(data, frames, timing, flags):
+            def process_audio(data, frames, timing, flags):
                 nonlocal resample_state, segmenter, segment_id
                 with lock:
                     if stop.is_set() or cancel.is_set() or complete.is_set():
@@ -183,6 +184,14 @@ def record_wav(
                         return None, audio.paComplete
                 return None, audio.paContinue
 
+            def on_audio(data, frames, timing, flags):
+                try:
+                    return process_audio(data, frames, timing, flags)
+                except Exception:  # noqa: BLE001 - propagate callback failures safely
+                    callback_error.set()
+                    complete.set()
+                    return None, audio.paComplete
+
             if cancel.is_set():
                 return b""
             stream = backend.open(
@@ -212,6 +221,8 @@ def record_wav(
                     stop.wait(min(remaining, 0.05))
             finally:
                 stream.close()
+            if callback_error.is_set() and not cancel.is_set():
+                raise AudioError("Ошибка обработки аудиопотока устройства.")
     except AudioError:
         raise
     except (OSError, RuntimeError, ValueError, KeyError, OverflowError):
