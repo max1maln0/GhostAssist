@@ -24,7 +24,8 @@ from config.settings import (
     profile_path,
     validate_hotkeys,
 )
-from core.audio_worker import AudioError, list_loopback_devices
+from core.audio_worker import list_loopback_devices
+from core.profile_store import write_profile
 from core.single_instance import SingleInstance
 from ui.hotkey_capture import HotkeyCapture, Tooltip
 from ui.tray import Tray
@@ -498,7 +499,8 @@ class DashboardApp(ctk.CTk):
             self.tray.icon.update_menu()
 
     def _on_close_changed(self):
-        self._save(CLOSE_TO_TRAY=str(bool(self.close_switch.get())).lower())
+        if not self._save(CLOSE_TO_TRAY=str(bool(self.close_switch.get())).lower()):
+            self._restore_switch(self.close_switch, self.settings.close_to_tray)
 
     def _signal_hotkey_capture(self, active):
         if self._service_running():
@@ -658,9 +660,7 @@ class DashboardApp(ctk.CTk):
     def save_current_legend(self):
         name = self.profile_selector.get()
         try:
-            profile_path(name).write_text(
-                self.legend_textbox.get("1.0", "end-1c"), encoding="utf-8"
-            )
+            write_profile(name, self.legend_textbox.get("1.0", "end-1c"))
         except (OSError, ValueError):
             messagebox.showerror("Профиль", "Не удалось сохранить профиль.")
             return
@@ -703,7 +703,7 @@ class DashboardApp(ctk.CTk):
         def scan():
             try:
                 result = (list_loopback_devices(), None)
-            except AudioError:
+            except Exception:  # noqa: BLE001 - report unexpected worker failures safely
                 result = ([], "Не удалось получить список устройств WASAPI.")
             try:
                 self.device_updates.put_nowait(result)
@@ -713,19 +713,32 @@ class DashboardApp(ctk.CTk):
         Thread(target=scan, daemon=True).start()
 
     def _on_auto_send_changed(self):
-        self._save(AUTO_SEND_TRANSCRIPT=str(bool(self.auto_send_switch.get())).lower())
+        if not self._save(
+            AUTO_SEND_TRANSCRIPT=str(bool(self.auto_send_switch.get())).lower()
+        ):
+            self._restore_switch(
+                self.auto_send_switch, self.settings.auto_send_transcript
+            )
 
     def _on_vad_changed(self):
-        self._save(VAD_ENABLED=str(bool(self.vad_switch.get())).lower())
+        if not self._save(VAD_ENABLED=str(bool(self.vad_switch.get())).lower()):
+            self._restore_switch(self.vad_switch, self.settings.vad_enabled)
 
     def _on_device_changed(self, value):
-        self._save(AUDIO_DEVICE="" if value == "По умолчанию" else value)
+        if not self._save(AUDIO_DEVICE="" if value == "По умолчанию" else value):
+            self.device_combo.set(self.settings.audio_device or "По умолчанию")
 
     def _on_memory_changed(self):
-        self._save(MEMORY_ENABLED=str(bool(self.memory_switch.get())).lower())
+        if not self._save(MEMORY_ENABLED=str(bool(self.memory_switch.get())).lower()):
+            self._restore_switch(self.memory_switch, self.settings.memory_enabled)
+
+    @staticmethod
+    def _restore_switch(widget, value):
+        (widget.select if value else widget.deselect)()
 
     def _on_depth_changed(self, value):
-        self._save(MEMORY_DEPTH=value)
+        if not self._save(MEMORY_DEPTH=value):
+            self.depth_combo.set(str(self.settings.memory_depth))
 
     def _reset_session(self):
         if self.assistant_process and self.assistant_process.poll() is None:
@@ -735,11 +748,15 @@ class DashboardApp(ctk.CTk):
             self.session_status.configure(text="Сессия  TEST 0 · INTERVIEW 0")
 
     def _on_model_changed(self, model):
-        self._save(GEMINI_MODEL=model)
+        if not self._save(GEMINI_MODEL=model):
+            self.model_combo.set(self.settings.gemini_model)
 
     def _on_resolution_changed(self, value):
         width, height = ("1920", "1080") if "1920" in value else ("1280", "720")
-        self._save(CROP_WIDTH=width, CROP_HEIGHT=height)
+        if not self._save(CROP_WIDTH=width, CROP_HEIGHT=height):
+            self.res_combo.set(
+                f"{self.settings.crop_width}x{self.settings.crop_height}"
+            )
 
     def _save(self, **values):
         prepared = None
