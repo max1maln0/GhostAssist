@@ -76,3 +76,9 @@ class CancellationSignal:
 
     def is_cancelled(self) -> bool:
         return self._event.is_set()
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def wait(self, timeout=None) -> bool:
+        return self._event.wait(timeout)

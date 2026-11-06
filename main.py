@@ -12,8 +12,10 @@ from pynput import mouse
 from config.settings import Settings, validate_hotkeys
 from core.audio_worker import AudioError, SegmentQueue, record_wav
 from core.context_manager import ContextManager
+from core.contracts import TaskError, TaskRequest, TaskStatus
 from core.hotkeys import VerifiedGlobalHotKeys
 from core.llm_worker import GenerationError, LLMWorker
+from core.orchestrator import TaskFailure, TaskOrchestrator
 from core.session_manager import SessionManager
 from core.single_instance import SingleInstance
 from core.task_state import State, TaskState
@@ -28,6 +30,10 @@ class GhostAssistApp:
         self.hud = StealthHUD()
         self.llm = LLMWorker(settings)
         self.tasks = TaskState()
+        self.screenshots = TaskOrchestrator()
+        self.screenshot_id = None
+        self.screenshot_discard = False
+        self.screenshot_session = None
         self.sessions = SessionManager(depth=settings.memory_depth)
         self.session_task = None
         self.session_question = None
@@ -46,6 +52,8 @@ class GhostAssistApp:
         self.overlay = None
         self.review = None
         self.closing = False
+        self.shutdown_deadline = None
+        self.shutdown_reported = False
         self.listeners = []
         self.listener_failed = False
         self.cancel_requested = Event()
@@ -66,11 +74,53 @@ class GhostAssistApp:
                 pass
 
     def capture(self):
-        task = self.tasks.begin(State.PROCESSING)
-        if task:
-            self.submit(task)
+        if (
+            self.closing
+            or self.screenshot_id is not None
+            or self.tasks.state is not State.IDLE
+            or self.monitoring
+            or self.capture_future is not None
+            or self.segments is not None
+        ):
+            return
+        request = TaskRequest("", "image/jpeg")
+        mode = self.context.mode
+        prompt = self.context.get_system_prompt(mode=mode)
+        generation, history = self.sessions.snapshot(mode)
+        if not self.settings.memory_enabled:
+            history = ()
+        self.screenshots.prepare(request)
+        self.screenshot_id = request.task_id
+        self.screenshot_discard = False
+        self.screenshot_session = (mode, generation)
+        self.hud.update_text("", "СКАН ЭКРАНА")
+
+        def work(request, token, publish):
+            started = monotonic()
+            if token.is_set():
+                return ""
+            try:
+                image = self.llm.capture_screen()
+                if token.is_set():
+                    return ""
+                return self.llm.generate(
+                    image,
+                    "image/jpeg",
+                    prompt,
+                    lambda text: publish(TaskStatus.CHUNK, text),
+                    token,
+                    history=history,
+                    budget=self.settings.task_timeout - (monotonic() - started),
+                )
+            except GenerationError as exc:
+                raise TaskFailure(TaskError("generation", str(exc))) from None
+
+        self.screenshots.start(work, self.settings.task_timeout)
+        self.future = self.screenshots.future
 
     def snip(self):
+        if self.screenshot_id is not None:
+            return
         task = self.tasks.begin(State.CAPTURING)
         if not task:
             return
@@ -92,6 +142,8 @@ class GhostAssistApp:
             self.submit(task, bbox=bbox)
 
     def audio(self):
+        if self.screenshot_id is not None:
+            return
         if self.settings.vad_enabled:
             if self.monitoring:
                 self.cancel()
@@ -287,6 +339,11 @@ class GhostAssistApp:
         if self.segments:
             self.segments.close()
             self.segments = None
+        if self.screenshot_id is not None:
+            self.screenshot_discard = True
+            self.screenshots.cancel()
+            self.hud.update_text("Задача отменена.", "ОТМЕНА")
+            return
         task = self.tasks.active
         if not task:
             self.hud.update_text(
@@ -308,7 +365,7 @@ class GhostAssistApp:
             self.hud.update_text(status="ГОТОВО")
 
     def switch_mode(self):
-        if self.tasks.state is State.IDLE:
+        if self.tasks.state is State.IDLE and self.screenshot_id is None:
             mode = self.context.toggle_mode()
             self.hud.update_text(f"Режим {mode}", f"[{mode}] ГОТОВО")
 
@@ -336,6 +393,7 @@ class GhostAssistApp:
                     break
                 action()
 
+        self._poll_screenshot()
         task = self.tasks.active
         if self.future and task:
             if self.future.done():
@@ -457,6 +515,16 @@ class GhostAssistApp:
         if alerts and not self.closing:
             self.hud.update_text(status=" · ".join(alerts))
 
+        if (
+            self.closing
+            and self.shutdown_deadline is not None
+            and monotonic() >= self.shutdown_deadline
+            and (self.future is not None or self.capture_future is not None)
+            and not self.shutdown_reported
+        ):
+            self.shutdown_reported = True
+            print("Ожидание фоновой задачи при завершении службы.", file=sys.stderr)
+
         if self.closing and self.future is None and self.capture_future is None:
             self.hud.root.destroy()
         else:
@@ -466,10 +534,47 @@ class GhostAssistApp:
         if self.closing:
             return
         self.closing = True
+        self.shutdown_deadline = monotonic() + 3
         self.cancel()
+        self.screenshots.close()
         self.sessions.close()
         for listener in self.listeners:
             listener.stop()
+
+    def _poll_screenshot(self):
+        if self.screenshot_id is None:
+            return
+        for event in self.screenshots.drain():
+            if event.task_id != self.screenshot_id or self.screenshot_discard:
+                continue
+            if event.status is TaskStatus.CHUNK:
+                self.hud.update_text(event.text, "ЗАПРОС GEMINI")
+            elif event.status is TaskStatus.FAILED:
+                self.hud.update_text(event.error.message, "ОШИБКА")
+            elif event.status is TaskStatus.COMPLETED:
+                result = event.text or ""
+                if self.settings.memory_enabled and result and self.screenshot_session:
+                    mode, generation = self.screenshot_session
+                    question, separator, answer = result.partition("Ответ:")
+                    if separator and question.strip().startswith("Вопрос:"):
+                        self.sessions.add(
+                            mode,
+                            question.removeprefix("Вопрос:"),
+                            answer,
+                            generation,
+                            Event(),
+                        )
+                if self.managed:
+                    test_count = len(self.sessions.snapshot("TEST")[1])
+                    interview_count = len(self.sessions.snapshot("INTERVIEW")[1])
+                    print(f"GHOST_SESSION {test_count} {interview_count}", flush=True)
+                self.hud.update_text(result, f"[{self.context.mode}] ГОТОВО")
+        if not self.screenshots.busy:
+            if self.screenshot_discard:
+                self.hud.update_text(status="ГОТОВО")
+            self.screenshot_id = None
+            self.screenshot_session = None
+            self.future = None
 
     def watch_parent(self, fd):
         try:

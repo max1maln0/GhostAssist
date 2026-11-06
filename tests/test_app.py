@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import main
 from config.settings import Settings
+from core.orchestrator import Lifecycle
 from core.task_state import State
 
 
@@ -13,6 +14,7 @@ class AppTests(unittest.TestCase):
             self.app = main.GhostAssistApp(Settings(_env_file=None))
         self.addCleanup(self.app.worker.shutdown)
         self.addCleanup(self.app.capture_worker.shutdown)
+        self.addCleanup(self.app.screenshots.close)
 
     def test_audio_toggle_blocks_screen_and_updates_hud(self):
         entered = threading.Event()
@@ -78,7 +80,8 @@ class AppTests(unittest.TestCase):
                 self.app.capture()
                 self.assertTrue(entered.wait(2))
                 self.app.poll()
-                self.assertIs(self.app.tasks.state, State.STREAMING)
+                self.assertIs(self.app.screenshots.state, Lifecycle.RUNNING)
+                self.app.hud.update_text.assert_called_with("partial", "ЗАПРОС GEMINI")
                 self.app.enqueue(self.app.cancel)
                 self.app.poll()
                 future = self.app.future
@@ -115,12 +118,82 @@ class AppTests(unittest.TestCase):
                 future = self.app.future
                 self.app.enqueue(self.app.close)
                 self.app.poll()
-                self.assertIs(self.app.tasks.state, State.CANCELLING)
+                self.assertIs(self.app.screenshots.state, Lifecycle.CANCELLED)
                 self.app.hud.root.destroy.assert_not_called()
                 release.set()
                 future.result(timeout=2)
                 self.app.poll()
                 self.app.hud.root.destroy.assert_called_once()
+
+    def test_screenshot_excludes_audio_and_repeat_until_cancelled_worker_returns(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def generate(data, mime_type, prompt, publish, cancel, **kwargs):
+            entered.set()
+            release.wait(2)
+            publish("stale")
+            return "stale"
+
+        with patch.object(self.app.llm, "capture_screen", return_value=b"jpg") as shot:
+            with patch.object(self.app.llm, "generate", side_effect=generate):
+                self.app.capture()
+                self.assertTrue(entered.wait(1))
+                future = self.app.future
+                self.app.audio()
+                self.app.snip()
+                self.app.capture()
+                self.assertIs(self.app.tasks.state, State.IDLE)
+                self.app.cancel()
+                self.app.capture()
+                self.assertEqual(shot.call_count, 1)
+                release.set()
+                future.result(2)
+                self.app.poll()
+                self.assertIsNone(self.app.screenshot_id)
+                self.assertNotIn("stale", str(self.app.hud.update_text.call_args_list))
+
+    def test_screenshot_timeout_drops_late_response_and_history(self):
+        self.app.settings.task_timeout = 0.1
+        entered, released = threading.Event(), threading.Event()
+
+        def generate(data, mime_type, prompt, publish, cancel, **kwargs):
+            entered.set()
+            self.assertTrue(cancel.wait(2))
+            publish("late")
+            released.set()
+            return "Вопрос: Поздний?\nОтвет: Поздний"
+
+        with (
+            patch.object(self.app.llm, "capture_screen", return_value=b"jpg"),
+            patch.object(self.app.llm, "generate", side_effect=generate),
+        ):
+            self.app.capture()
+            self.assertTrue(entered.wait(1))
+            future = self.app.future
+            self.assertTrue(released.wait(2))
+            future.result(2)
+            self.app.poll()
+            self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
+            self.assertNotIn("late", str(self.app.hud.update_text.call_args_list))
+            self.assertTrue(
+                any(
+                    "Превышено" in str(c)
+                    for c in self.app.hud.update_text.call_args_list
+                )
+            )
+
+    def test_screenshot_error_does_not_leak_exception_or_history(self):
+        with patch.object(
+            self.app.llm, "capture_screen", side_effect=OSError("secret")
+        ):
+            self.app.capture()
+            self.app.future.result(2)
+            self.app.poll()
+        self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
+        self.assertNotIn("secret", str(self.app.hud.update_text.call_args_list))
+        self.app.hud.update_text.assert_called_with(
+            "Ошибка выполнения задачи.", "ОШИБКА"
+        )
 
     def test_completed_response_enters_history_and_is_reused(self):
         with patch.object(self.app.llm, "capture_screen", return_value=b"jpg"):

@@ -1,7 +1,7 @@
 """Bounded, GUI-independent task execution with cooperative cancellation."""
 
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import CancelledError, ThreadPoolExecutor, TimeoutError
 from enum import Enum
 from threading import Lock, Timer
 from typing import Callable, Protocol
@@ -21,6 +21,14 @@ class Lifecycle(str, Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     FAILED = "failed"
+
+
+class TaskFailure(Exception):
+    """An explicitly sanitized error intended for presentation."""
+
+    def __init__(self, error: TaskError):
+        super().__init__(error.code)
+        self.error = error
 
 
 class Handler(Protocol):
@@ -50,6 +58,11 @@ class TaskOrchestrator:
     def state(self):
         with self._lock:
             return self._state
+
+    @property
+    def future(self):
+        with self._lock:
+            return self._future
 
     @property
     def busy(self):
@@ -99,6 +112,8 @@ class TaskOrchestrator:
                 token,
                 lambda status, text=None: self._publish(request.task_id, status, text),
             )
+        except TaskFailure as exc:
+            self._finish(request.task_id, Lifecycle.FAILED, error=exc.error)
         except Exception:  # noqa: BLE001 - do not leak handler exceptions or secrets
             self._finish(
                 request.task_id,
@@ -164,4 +179,6 @@ class TaskOrchestrator:
                 self._future.result(timeout=timeout)
             except TimeoutError:
                 return False
+            except CancelledError:
+                pass
         return True
