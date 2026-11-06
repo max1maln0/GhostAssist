@@ -101,3 +101,26 @@ class OrchestratorTests(unittest.TestCase):
         release.set()
         self.orchestrator._future.result(1)
         self.assertTrue(self.orchestrator.close(timeout=0.1))
+
+    def test_repeated_cancel_keeps_one_executor_thread_and_discards_late_output(self):
+        worker_ids = set()
+        for _ in range(30):
+            entered = threading.Event()
+            self.orchestrator.prepare(TaskRequest("q", "text/plain"))
+
+            def work(request, token, publish, ready=entered):
+                worker_ids.add(threading.get_ident())
+                ready.set()
+                token.wait(1)
+                publish(TaskStatus.CHUNK, "late")
+                return "late"
+
+            self.orchestrator.start(work, 2)
+            self.assertTrue(entered.wait(1))
+            self.assertTrue(self.orchestrator.cancel())
+            self.orchestrator.future.result(1)
+            self.assertEqual(
+                [event.status for event in self.orchestrator.drain()],
+                [TaskStatus.CANCELLED],
+            )
+        self.assertEqual(len(worker_ids), 1)
