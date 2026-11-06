@@ -19,7 +19,13 @@ INLINE_COMMENT = re.compile(
 
 def update_env(values: dict[str, str], path: Path = ENV_FILE):
     with tempfile.NamedTemporaryFile(
-        dir=path.parent, mode="w", encoding="utf-8", newline="", delete=False
+        dir=path.parent,
+        mode="w",
+        encoding="utf-8",
+        newline="",
+        prefix=".ghostassist-env-",
+        suffix=".tmp",
+        delete=False,
     ) as output:
         temp = Path(output.name)
         try:
