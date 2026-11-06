@@ -114,7 +114,7 @@ class GhostAssistApp:
                     budget=self.settings.task_timeout - (monotonic() - started),
                 )
             except ProviderError as exc:
-                raise TaskFailure(TaskError("generation", str(exc))) from None
+                raise TaskFailure(TaskError(exc.code.value, str(exc))) from None
 
         self.screenshots.start(work, self.settings.task_timeout)
         self.future = self.screenshots.future
