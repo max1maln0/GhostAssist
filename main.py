@@ -544,6 +544,9 @@ class GhostAssistApp:
     def _poll_screenshot(self):
         if self.screenshot_id is None:
             return
+        if self.cancel_requested.is_set() or self.close_requested.is_set():
+            self.screenshot_discard = True
+            self.screenshots.cancel()
         for event in self.screenshots.drain():
             if event.task_id != self.screenshot_id or self.screenshot_discard:
                 continue
@@ -562,7 +565,7 @@ class GhostAssistApp:
                             question.removeprefix("Вопрос:"),
                             answer,
                             generation,
-                            Event(),
+                            self.cancel_requested,
                         )
                 if self.managed:
                     test_count = len(self.sessions.snapshot("TEST")[1])

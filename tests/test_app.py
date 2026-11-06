@@ -230,6 +230,22 @@ class AppTests(unittest.TestCase):
                 self.app.poll()
                 self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
 
+    def test_pending_cancel_discards_completed_screenshot_before_ui_delivery(self):
+        with (
+            patch.object(self.app.llm, "capture_screen", return_value=b"jpg"),
+            patch.object(
+                self.app.llm,
+                "generate",
+                return_value="Вопрос: Секрет?\nОтвет: Поздний",
+            ),
+        ):
+            self.app.capture()
+            self.app.future.result(2)
+            self.app.cancel_requested.set()
+            self.app._poll_screenshot()
+        self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
+        self.assertNotIn("Поздний", str(self.app.hud.update_text.call_args_list))
+
     def test_vad_recording_reaches_transcription_and_can_be_cancelled(self):
         self.app.settings.vad_enabled = True
         entered = threading.Event()
