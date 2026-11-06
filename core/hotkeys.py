@@ -5,10 +5,17 @@ check the returned hook handle. Keep this small Windows-specific adapter in
 step with pynput's message-loop implementation when upgrading the dependency.
 """
 
+from ctypes import wintypes
 from threading import Event
 
 from pynput import keyboard
 from pynput._util.win32 import MessageLoop, SystemHook
+
+# Pynput 1.8.2 leaves these at ctypes' default c_int; HHOOK and LRESULT
+# must retain their full pointer width on 64-bit Windows.
+SystemHook._SetWindowsHookEx.restype = wintypes.HHOOK
+SystemHook._UnhookWindowsHookEx.restype = wintypes.BOOL
+SystemHook._CallNextHookEx.restype = wintypes.LPARAM
 
 
 class VerifiedGlobalHotKeys(keyboard.GlobalHotKeys):

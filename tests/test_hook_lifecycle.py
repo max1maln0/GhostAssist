@@ -2,6 +2,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from pynput._util.win32 import SystemHook
+
 from core.hotkeys import VerifiedGlobalHotKeys
 
 
@@ -30,6 +32,7 @@ class HookLifecycleTests(unittest.TestCase):
         listener.stop()
         listener.join(timeout=2)
         self.assertFalse(listener.is_alive())
+        self.assertNotIn(listener.ident, SystemHook._HOOKS)
 
 
 if __name__ == "__main__":
