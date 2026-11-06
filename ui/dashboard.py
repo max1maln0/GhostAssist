@@ -10,7 +10,6 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 from pydantic import ValidationError
-from pynput import keyboard
 
 from config.env_file import update_env
 from config.settings import (
@@ -25,6 +24,7 @@ from config.settings import (
     validate_hotkeys,
 )
 from core.audio_worker import list_loopback_devices
+from core.hotkeys import VerifiedGlobalHotKeys
 from core.profile_store import write_profile
 from core.single_instance import SingleInstance
 from ui.hotkey_capture import HotkeyCapture, Tooltip
@@ -452,10 +452,10 @@ class DashboardApp(ctk.CTk):
 
     def _create_dashboard_hotkey(self, settings):
         validate_hotkeys(settings)
-        listener = keyboard.GlobalHotKeys(
+        listener = VerifiedGlobalHotKeys(
             {settings.hotkey_dashboard: lambda: self._enqueue_tray("toggle")}
         )
-        listener.start()
+        listener.start_verified()
         return listener
 
     def _replace_dashboard_hotkey(self, listener):
@@ -895,6 +895,12 @@ class DashboardApp(ctk.CTk):
                 pass
 
     def _poll_process(self):
+        if self.dashboard_hotkey and not self.dashboard_hotkey.is_alive():
+            self.dashboard_hotkey = None
+            if not self.closing:
+                messagebox.showerror(
+                    "Хоткей", "Глобальная клавиша Dashboard перестала работать."
+                )
         if self.exit_requested.is_set() and not self.closing:
             self.exit_app()
             if self.assistant_process is None:

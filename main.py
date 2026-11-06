@@ -7,11 +7,12 @@ from queue import Empty, Full, Queue
 from threading import Event, Thread
 from time import monotonic
 
-from pynput import keyboard, mouse
+from pynput import mouse
 
 from config.settings import Settings, validate_hotkeys
 from core.audio_worker import AudioError, SegmentQueue, record_wav
 from core.context_manager import ContextManager
+from core.hotkeys import VerifiedGlobalHotKeys
 from core.llm_worker import GenerationError, LLMWorker
 from core.session_manager import SessionManager
 from core.single_instance import SingleInstance
@@ -511,7 +512,7 @@ class GhostAssistApp:
 
         try:
             self.listeners = [
-                keyboard.GlobalHotKeys(
+                VerifiedGlobalHotKeys(
                     {
                         key: lambda action=action: dispatch_hotkey(action)
                         for key, action in bindings.items()
@@ -519,8 +520,8 @@ class GhostAssistApp:
                 ),
                 mouse.Listener(on_click=click),
             ]
-            for listener in self.listeners:
-                listener.start()
+            self.listeners[0].start_verified()
+            self.listeners[1].start()
             if managed:
                 Thread(
                     target=self.watch_parent, args=(sys.stdin.fileno(),), daemon=True
