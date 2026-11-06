@@ -11,6 +11,25 @@ from ui.dashboard import DashboardApp
 
 
 class HookLifecycleTests(unittest.TestCase):
+    def test_hook_exception_is_reported_without_sticking_listener(self):
+        class RaisingHook:
+            def __init__(self, *_):
+                pass
+
+            def __enter__(self):
+                raise OSError("private detail")
+
+            def __exit__(self, *_):
+                pass
+
+        listener = VerifiedGlobalHotKeys({"<ctrl>+<shift>+<f9>": lambda: None})
+        with patch("core.hotkeys.SystemHook", RaisingHook):
+            with self.assertRaises(OSError) as error:
+                listener.start_verified()
+        self.assertNotIn("private detail", str(error.exception))
+        self.assertFalse(listener.hook_installed)
+        self.assertFalse(listener.is_alive())
+
     def test_null_windows_hook_is_reported_and_thread_stops(self):
         class FailedHook:
             def __init__(self, *_):
