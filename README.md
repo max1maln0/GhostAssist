@@ -137,9 +137,9 @@ Dashboard показывает количество завершённых вз�
 ```powershell
 python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
-python -m compileall -q config core ui tests main.py
-python -m ruff check config core ui tests main.py
-python -m ruff format --check config core ui tests main.py
+python -m compileall -q config core providers ui tests main.py
+python -m ruff check config core providers ui tests main.py
+python -m ruff format --check config core providers ui tests main.py
 ```
 
 Автоматические тесты используют моки Gemini и аудиоустройств: реальный ключ, платные запросы и оборудование для них не нужны. Они не заменяют проверку на Windows с настоящим устройством вывода. Вручную проверьте запись, отключение устройства, отмену во время генерации, трей и глобальные сочетания. Также проверьте выделение на нескольких мониторах с разным DPI, включая монитор слева или выше основного, и поведение HUD в используемом ПО захвата.

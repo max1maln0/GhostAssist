@@ -280,7 +280,7 @@ class GeminiTests(unittest.TestCase):
             task_timeout=kwargs.get("total", 2),
         )
         worker = LLMWorker(settings)
-        with patch("core.llm_worker.genai.Client", return_value=fake):
+        with patch("providers.gemini_client.genai.Client", return_value=fake):
             return worker.generate(
                 b"media", "audio/wav", "prompt", publish, cancel or threading.Event()
             )
@@ -309,7 +309,7 @@ class GeminiTests(unittest.TestCase):
 
         settings = Settings(_env_file=None, gemini_api_key="test-key")
         worker = LLMWorker(settings)
-        with patch("core.llm_worker.genai.Client", side_effect=client):
+        with patch("providers.gemini_client.genai.Client", side_effect=client):
             self.assertEqual(
                 worker.generate(
                     b"wav", "audio/wav", "prompt", lambda _: None, threading.Event()
@@ -325,7 +325,7 @@ class GeminiTests(unittest.TestCase):
     def test_history_is_sent_as_user_and_model_messages(self):
         worker = LLMWorker(Settings(_env_file=None, gemini_api_key="test"))
         fake = FakeGemini([[chunk("готово", "STOP")]])
-        with patch("core.llm_worker.genai.Client", return_value=fake):
+        with patch("providers.gemini_client.genai.Client", return_value=fake):
             worker.generate(
                 b"jpg",
                 "image/jpeg",
@@ -350,7 +350,7 @@ class GeminiTests(unittest.TestCase):
             audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
             audio.writeframes(b"\0\0" * 320)
         fake = FakeGemini([[chunk("Распознанный текст", "STOP")]])
-        with patch("core.llm_worker.genai.Client", return_value=fake):
+        with patch("providers.gemini_client.genai.Client", return_value=fake):
             self.assertEqual(
                 worker.transcribe(buffer.getvalue(), cancel), "Распознанный текст"
             )
@@ -373,17 +373,17 @@ class GeminiTests(unittest.TestCase):
             )
         )
         fake = FakeGemini([[None]])
-        with patch("core.llm_worker.genai.Client", return_value=fake):
+        with patch("providers.gemini_client.genai.Client", return_value=fake):
             with self.assertRaisesRegex(GenerationError, "общее время"):
                 worker.transcribe(data, threading.Event())
         self.assertTrue(fake.async_closed)
         cancelled = threading.Event()
         cancelled.set()
-        with patch("core.llm_worker.genai.Client") as client:
+        with patch("providers.gemini_client.genai.Client") as client:
             self.assertIsNone(worker.transcribe(data, cancelled))
             client.assert_not_called()
         fake = FakeGemini([[errors.ClientError(401, {"message": "secret"})]])
-        with patch("core.llm_worker.genai.Client", return_value=fake):
+        with patch("providers.gemini_client.genai.Client", return_value=fake):
             with self.assertRaises(GenerationError) as error:
                 worker.transcribe(data, threading.Event())
         self.assertNotIn("secret", str(error.exception))

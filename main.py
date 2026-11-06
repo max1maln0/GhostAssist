@@ -16,6 +16,7 @@ from core.contracts import TaskError, TaskRequest, TaskStatus
 from core.hotkeys import VerifiedGlobalHotKeys
 from core.llm_worker import GenerationError, LLMWorker
 from core.orchestrator import TaskFailure, TaskOrchestrator
+from core.provider_contracts import ProviderError
 from core.session_manager import SessionManager
 from core.single_instance import SingleInstance
 from core.task_state import State, TaskState
@@ -112,7 +113,7 @@ class GhostAssistApp:
                     history=history,
                     budget=self.settings.task_timeout - (monotonic() - started),
                 )
-            except GenerationError as exc:
+            except ProviderError as exc:
                 raise TaskFailure(TaskError("generation", str(exc))) from None
 
         self.screenshots.start(work, self.settings.task_timeout)
@@ -438,7 +439,7 @@ class GhostAssistApp:
                             else f"[{self.context.mode}] ГОТОВО"
                         )
                         self.hud.update_text(result, status)
-                except (AudioError, GenerationError) as exc:
+                except (AudioError, ProviderError) as exc:
                     if not task.cancel.is_set():
                         self.hud.update_text(str(exc), "ОШИБКА")
                 except Exception:  # noqa: BLE001 - isolate the application boundary
