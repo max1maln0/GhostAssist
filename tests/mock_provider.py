@@ -22,6 +22,10 @@ class MockProvider:
         self.error = error
 
     def generate_response(self, request, publish, cancel):
+        if cancel.is_set():
+            raise ProviderError(ProviderErrorCode.CANCELLED, "Cancelled")
+        if request.timeout is not None and request.timeout <= 0:
+            raise ProviderError(ProviderErrorCode.TIMEOUT, "Timeout")
         if request.mime_type not in ("text/plain", "image/jpeg", "audio/wav"):
             raise ProviderError(
                 ProviderErrorCode.UNSUPPORTED_CAPABILITY, "Unsupported format"

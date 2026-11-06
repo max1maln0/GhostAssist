@@ -70,6 +70,9 @@ class ProviderTests(unittest.TestCase):
             MockProvider().generate_response(request, lambda _: None, cancel)
         self.assertEqual(error.exception.code, ProviderErrorCode.CANCELLED)
         with self.assertRaises(ProviderError) as error:
+            MockProvider(chunks=()).generate_response(request, lambda _: None, cancel)
+        self.assertEqual(error.exception.code, ProviderErrorCode.CANCELLED)
+        with self.assertRaises(ProviderError) as error:
             GeminiProvider(Settings(_env_file=None)).generate_response(
                 GenerationRequest(b"x", "video/mp4", "prompt"),
                 lambda _: None,

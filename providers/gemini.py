@@ -23,7 +23,7 @@ class GeminiProvider:
             "image/jpeg": self.capabilities.images,
             "audio/wav": self.capabilities.audio,
         }
-        if not allowed.get(request.mime_type, False):
+        if not allowed.get(request.mime_type, False) or not self.capabilities.streaming:
             raise GenerationError(
                 "Формат не поддерживается провайдером.",
                 ProviderErrorCode.UNSUPPORTED_CAPABILITY,
