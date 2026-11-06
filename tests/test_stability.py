@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from config.env_file import update_env
 from config.settings import Settings, profile_path, validate_hotkeys
-from core.audio_worker import AudioError, record_wav
+from core.audio_worker import AudioError, SegmentQueue, record_wav
 from core.llm_worker import GenerationError, LLMWorker
 from core.session_manager import Interaction
 from core.task_state import State, TaskState
@@ -79,6 +79,18 @@ class FakeAudio:
 
 
 class AudioTests(unittest.TestCase):
+    def test_queue_overflow_and_close_stay_bounded_under_load(self):
+        queue = SegmentQueue(max_bytes=100, max_segments=4)
+        for segment_id in range(1, 10001):
+            queue.put(segment_id, b"a" * 20)
+        self.assertEqual(queue.take_overflow(), 9996)
+        self.assertEqual([queue.get()[0][1] for _ in range(4)], [1, 2, 3, 4])
+        self.assertIsNone(queue.get())
+        queue.put(10001, b"a" * 20)
+        queue.close()
+        self.assertIsNone(queue.get())
+        self.assertFalse(queue.put(10002, b"a" * 20))
+
     def capture(self, pcm=b"", limit=100, **kwargs):
         stop = threading.Event()
         backend = FakeAudio(pcm, stop, **kwargs)

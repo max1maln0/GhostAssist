@@ -181,6 +181,26 @@ class AppTests(unittest.TestCase):
                 self.assertFalse(self.app.monitoring)
                 self.assertIs(self.app.tasks.state, State.IDLE)
 
+    def test_repeated_vad_start_stop_releases_capture_and_queue(self):
+        self.app.settings.vad_enabled = True
+
+        def record(stop, cancel, seconds, max_bytes, device, **kwargs):
+            stop.wait(2)
+            return b""
+
+        with patch("main.record_wav", side_effect=record):
+            for _ in range(30):
+                self.app.audio()
+                future = self.app.capture_future
+                self.assertIsNotNone(future)
+                self.app.cancel()
+                future.result(timeout=2)
+                self.app.poll()
+                self.assertFalse(self.app.monitoring)
+                self.assertIsNone(self.app.capture_future)
+                self.assertIsNone(self.app.segments)
+                self.assertIs(self.app.tasks.state, State.IDLE)
+
     def test_vad_segment_reaches_transcription_review(self):
         self.app.settings.vad_enabled = True
         emitted = threading.Event()
