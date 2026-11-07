@@ -1,5 +1,6 @@
 import re
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,7 +35,9 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
-    gemini_api_key: SecretStr = SecretStr("")
+    schema_version: Literal[1] = 1
+    ai_provider: Literal["gemini"] = "gemini"
+    gemini_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
     gemini_model: str = Field(GEMINI_MODELS[0], min_length=1)
     active_profile: str = "example_legend.md"
     crop_width: int = Field(1280, ge=160, le=7680)
@@ -64,6 +67,11 @@ class Settings(BaseSettings):
     hotkey_page_up: str = "<alt>+<page_up>"
     hotkey_page_down: str = "<alt>+<page_down>"
 
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def parse_schema_version(cls, value):
+        return 1 if value == "1" else value
+
     @field_validator("active_profile")
     @classmethod
     def check_profile(cls, value):
@@ -81,6 +89,51 @@ class Settings(BaseSettings):
     def has_api_key(self):
         key = self.gemini_api_key.get_secret_value().strip()
         return bool(key and key.isascii() and key != "AIzaSyYourActualApiKeyHere")
+
+    @property
+    def groups(self):
+        from config.groups import ConfigurationGroups
+
+        return ConfigurationGroups(
+            application={"schema_version": self.schema_version},
+            tasks={"timeout": self.task_timeout},
+            audio={
+                "device": self.audio_device,
+                "max_seconds": self.audio_max_seconds,
+                "max_mib": self.audio_max_mib,
+                "vad_enabled": self.vad_enabled,
+                "auto_send": self.auto_send_transcript,
+                "min_speech_ms": self.vad_min_speech_ms,
+                "silence_ms": self.vad_silence_ms,
+                "segment_seconds": self.vad_max_seconds,
+                "sensitivity": self.vad_sensitivity,
+            },
+            screen={"width": self.crop_width, "height": self.crop_height},
+            interface={
+                "close_to_tray": self.close_to_tray,
+                "hotkeys": tuple((name, getattr(self, name)) for name in HOTKEY_LABELS),
+            },
+            memory={
+                "enabled": self.memory_enabled,
+                "depth": self.memory_depth,
+                "profile": self.active_profile,
+            },
+            provider={
+                "identifier": self.ai_provider,
+                "model": self.gemini_model,
+                "api_key": self.gemini_api_key,
+                "request_timeout": self.request_timeout,
+            },
+        )
+
+
+def load_settings(path: Path = ENV_FILE):
+    from config.migration import migrate_env, read_version
+
+    read_version(path)
+    settings = Settings(_env_file=path)
+    migrate_env(path)
+    return settings
 
 
 HOTKEY_LABELS = {

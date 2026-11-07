@@ -12,6 +12,7 @@ import customtkinter as ctk
 from pydantic import ValidationError
 
 from config.env_file import update_env
+from config.migration import ConfigurationError
 from config.settings import (
     GEMINI_MODELS,
     HOTKEY_LABELS,
@@ -20,6 +21,7 @@ from config.settings import (
     HotkeyValidationError,
     Settings,
     format_hotkey,
+    load_settings,
     profile_path,
     validate_hotkeys,
 )
@@ -73,13 +75,16 @@ class DashboardApp(ctk.CTk):
         self.restart_pending = False
         self.closing = False
         try:
-            self.settings = Settings()
-        except ValidationError:
+            self.settings = load_settings()
+        except (ValidationError, ConfigurationError, OSError) as exc:
             self.settings = Settings.model_construct()
+            message = (
+                str(exc)
+                if isinstance(exc, ConfigurationError)
+                else "Проверьте значения в .env перед запуском службы."
+            )
             self.after_idle(
-                lambda: messagebox.showerror(
-                    "Настройки", "Проверьте значения в .env перед запуском службы."
-                )
+                lambda message=message: messagebox.showerror("Настройки", message)
             )
 
         self.hotkey_buttons = {}
@@ -794,13 +799,15 @@ class DashboardApp(ctk.CTk):
         except HotkeyValidationError as exc:
             messagebox.showwarning("Хоткей", str(exc), parent=self)
             return False
-        except (ValueError, OSError, RuntimeError):
+        except (ValueError, OSError, RuntimeError) as exc:
             if prepared is not None:
                 prepared.stop()
                 prepared.join(timeout=1)
             messagebox.showerror(
                 "Настройки",
-                "Не удалось сохранить настройки или зарегистрировать хоткей.",
+                str(exc)
+                if isinstance(exc, ConfigurationError)
+                else "Не удалось сохранить настройки или зарегистрировать хоткей.",
             )
             return False
         self.settings = candidate
@@ -840,9 +847,9 @@ class DashboardApp(ctk.CTk):
                     "Служба уже запущена отдельно. Завершите её перед запуском из Dashboard.",
                 )
                 return
-            self.settings = Settings()
+            self.settings = load_settings()
             validate_hotkeys(self.settings)
-        except ValueError:
+        except (ValueError, OSError):
             messagebox.showerror("Настройки", "Проверьте .env и комбинации клавиш.")
             return
         if not self.settings.has_api_key:

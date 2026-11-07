@@ -4,7 +4,7 @@ from queue import Empty, Full, Queue
 from threading import Event, Thread
 from time import monotonic
 
-from config.settings import Settings, validate_hotkeys
+from config.settings import load_settings, validate_hotkeys
 from core.controller import ApplicationController, ViewKind
 from platform_adapters.windows.composition import build_dependencies, configure_dpi
 from platform_adapters.windows.single_instance import SingleInstance
@@ -275,7 +275,7 @@ def main():
 
 
 def run_service():
-    settings = Settings()
+    settings = load_settings()
     validate_hotkeys(settings)
     if not settings.has_api_key:
         print("Укажите ключ Gemini в Dashboard или .env.", file=sys.stderr)

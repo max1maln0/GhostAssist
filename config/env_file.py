@@ -18,6 +18,12 @@ INLINE_COMMENT = re.compile(
 
 
 def update_env(values: dict[str, str], path: Path = ENV_FILE):
+    from config.migration import read_version
+
+    read_version(path)
+    if "SCHEMA_VERSION" in values and values["SCHEMA_VERSION"] != "1":
+        raise ValueError("Неподдерживаемая версия схемы.")
+    values = {"SCHEMA_VERSION": "1", **values}
     with tempfile.NamedTemporaryFile(
         dir=path.parent,
         mode="w",
@@ -60,6 +66,8 @@ def update_env(values: dict[str, str], path: Path = ENV_FILE):
 
 
 def _assignment(key, value):
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+        raise ValueError("Некорректное имя параметра.")
     if "\n" in value or "\r" in value:
         raise ValueError("Настройка должна занимать одну строку.")
     escaped = value.replace("\\", "\\\\").replace("'", "\\'")
