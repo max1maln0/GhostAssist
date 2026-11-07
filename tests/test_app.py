@@ -74,6 +74,29 @@ class AppTests(unittest.TestCase):
         self.assertFalse(self.app.busy)
         self.assertIsNone(self.app.segments)
 
+    def test_20_vad_start_stop_cycles_reuse_source_and_release_resources(self):
+        self.settings.vad_enabled = True
+        source_threads = set()
+        entered = threading.Event()
+
+        def record(stop, cancel, *args, **kwargs):
+            source_threads.add(threading.get_ident())
+            entered.set()
+            stop.wait(2)
+            return b""
+
+        self.deps.audio.record.side_effect = record
+        for _ in range(20):
+            entered.clear()
+            self.app.audio()
+            self.assertTrue(entered.wait(1))
+            future = self.app.source_future
+            self.app.cancel()
+            future.result(2)
+            self.app.poll()
+            self.assertFalse(self.app.busy)
+        self.assertEqual(len(source_threads), 1)
+
     def test_ui_review_callback_uses_controller(self):
         from main import GhostAssistApp
 
