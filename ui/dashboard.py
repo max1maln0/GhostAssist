@@ -349,14 +349,21 @@ class DashboardApp(
             self.applied
             and self.applied["signature"] != service_signature(self.settings)
         )
+        status_prefix = (
+            "Последняя ошибка: " + self.last_error + "\n" if self.last_error else ""
+        )
         self.change_status.configure(
-            text="Сохранение…"
-            if self.saving
-            else f"Несохранённых полей: {dirty}"
-            if dirty
-            else "Сохранено · для службы требуется «Применить и перезапустить»"
-            if pending
-            else "Настройки сохранены"
+            text=status_prefix
+            + (
+                "Сохранение…"
+                if self.saving
+                else f"Несохранённых полей: {dirty}"
+                if dirty
+                else "Сохранено · для службы требуется «Применить и перезапустить»"
+                if pending
+                else "Настройки сохранены"
+            ),
+            text_color=ERROR if self.last_error else TEXT_MUTED,
         )
         self.configuration_status.configure(
             text=f"Схема {self.settings.schema_version} · переменные окружения имеют приоритет над .env"

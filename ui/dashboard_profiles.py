@@ -53,6 +53,7 @@ class ProfileActions:
             self.set_error(
                 "Не удалось прочитать Markdown-профиль. Проверьте имя и доступ к файлу."
             )
+            self.profile_selector.set(self.loaded_profile)
             return False
         self.loaded_profile, self.profile_original, self.profile_dirty = (
             name,

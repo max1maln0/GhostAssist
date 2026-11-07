@@ -90,6 +90,8 @@ class DashboardGuiTests(unittest.TestCase):
 
     def test_secret_save_replace_delete_never_prefills_entry(self):
         entry = self.app.key_controls["openai"][0]
+        self.app.device_selected("Pending USB")
+        self.app.device_combo.set("Pending USB")
         for key in ("offline-key-one", "offline-key-two"):
             entry.insert(0, key)
             self.app.save_key("openai")
@@ -98,6 +100,9 @@ class DashboardGuiTests(unittest.TestCase):
                 load_settings(self.path).openai_api_key.get_secret_value(), key
             )
             self.assertEqual(entry.get(), "")
+            self.assertEqual(self.app.variable("AUDIO_DEVICE").get(), "Pending USB")
+            self.assertEqual(self.app.device_combo.get(), "Pending USB")
+            self.assertEqual(self.app.settings.audio_device, "")
         with patch("ui.dashboard_actions.messagebox.askyesno", return_value=True):
             self.app.delete_key("openai")
             self.pump(self.app.save_jobs)
@@ -118,6 +123,7 @@ class DashboardGuiTests(unittest.TestCase):
         self.assertIn("AUDIO_MAX_SECONDS", self.app.draft.changes)
         self.assertEqual(self.app.save_button.cget("state"), "normal")
         self.assertNotIn("private-data", self.app.last_error)
+        self.assertIn(self.app.last_error, self.app.change_status.cget("text"))
 
     def test_profiles_dirty_warning_atomic_save_and_traversal(self):
         profile = self.directory / self.app.settings.active_profile
@@ -133,7 +139,9 @@ class DashboardGuiTests(unittest.TestCase):
         self.assertTrue(self.app.save_current_legend())
         self.assertEqual(profile.read_text(encoding="utf-8"), "Example profile")
         self.assertFalse(self.app.profile_dirty)
+        self.app.profile_selector.set("../escape.md")
         self.assertFalse(self.app.load_selected_profile("../escape.md"))
+        self.assertEqual(self.app.profile_selector.get(), self.app.loaded_profile)
         self.assertFalse((self.directory.parent / "escape.md").exists())
         profile.write_text("external edit", encoding="utf-8")
         self.assertFalse(self.app.save_current_legend())

@@ -69,7 +69,6 @@ class SettingsActions:
                 value = self.draft.display(key)
                 self.draft.baseline[key] = value
                 variable.set(value)
-            self.device_combo.set(self.settings.audio_device or "По умолчанию")
             for key, button in self.hotkey_buttons.items():
                 button.configure(
                     text=format_hotkey(getattr(self.settings, key.lower()))
@@ -79,6 +78,7 @@ class SettingsActions:
         for key, value in (remaining or {}).items():
             if key in self.variables:
                 self.variables[key].set(value)
+        self.device_combo.set(self.variable("AUDIO_DEVICE").get() or "По умолчанию")
         self.refresh_provider_info()
         self.refresh_key_states()
         self.refresh_summary()

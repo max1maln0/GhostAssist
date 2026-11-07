@@ -12,7 +12,6 @@ from providers.gemini_catalog import GEMINI_MODEL_CAPABILITIES
 from providers.openai_catalog import OPENAI_MODEL_CAPABILITIES
 
 CATALOGS = {"gemini": GEMINI_MODEL_CAPABILITIES, "openai": OPENAI_MODEL_CAPABILITIES}
-LOCAL_FIELDS = {"HOTKEY_DASHBOARD", "CLOSE_TO_TRAY"}
 
 
 class SettingsEditError(ValueError):
