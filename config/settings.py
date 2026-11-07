@@ -1,3 +1,5 @@
+import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Literal
@@ -11,6 +13,18 @@ PROFILES = ROOT / "config" / "profiles"
 GEMINI_MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash")
 OPENAI_GENERATION_MODEL = "gpt-5.6-terra"
 OPENAI_TRANSCRIPTION_MODEL = "gpt-transcribe"
+
+
+def service_signature(settings):
+    """Opaque acknowledgement of the actual child snapshot, never raw secrets."""
+    values = {
+        key: value.get_secret_value() if isinstance(value, SecretStr) else value
+        for key, value in settings.model_dump().items()
+        if key not in ("close_to_tray", "hotkey_dashboard")
+    }
+    return hashlib.sha256(
+        json.dumps(values, sort_keys=True).encode("utf-8")
+    ).hexdigest()
 
 
 def profile_path(name: str, directory: Path = PROFILES) -> Path:
