@@ -180,6 +180,7 @@ class OpenAIConfigurationTests(unittest.TestCase):
         from ui.dashboard_jobs import JobRunner
 
         dashboard = SimpleNamespace(
+            assistant_process=None,
             closing=False,
             service_state="stopped",
             _service_running=Mock(return_value=False),
