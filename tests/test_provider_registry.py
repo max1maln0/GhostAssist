@@ -77,6 +77,7 @@ class RegistryTests(unittest.TestCase):
 
     def test_registration_listing_is_lazy_and_catalog_is_immutable(self):
         self.assertEqual(self.registry.identifiers(), ("mock",))
+        self.assertEqual(self.bound.capabilities, ADAPTER)
         self.assertIs(self.registry.describe("mock").models["full"], MODEL)
         self.factory.assert_not_called()
         with self.assertRaises(TypeError):

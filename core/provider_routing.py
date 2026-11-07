@@ -27,6 +27,10 @@ class BoundGeneration:
         self.registry = registry
         self.binding = binding
 
+    @property
+    def capabilities(self):
+        return self.registry.describe(self.binding.provider_id).capabilities
+
     def generate_response(self, request, publish, cancel):
         started = monotonic()
         check_cancelled(cancel)
