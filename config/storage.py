@@ -5,6 +5,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from uuid import uuid4
 
 _guard = threading.Lock()
 _locks = {}
@@ -47,6 +48,13 @@ def configuration_lock(path: Path, timeout: float = 10):
                     time.sleep(0.01)
             held.add(key)
             try:
+                if not path.exists() and any(
+                    path.parent.glob(f".ghostassist-env-{path.name}-*.backup")
+                ):
+                    raise OSError(
+                        "Обнаружена резервная копия незавершённого сохранения. "
+                        "Восстановите конфигурацию перед запуском."
+                    )
                 yield
             finally:
                 held.remove(key)
@@ -109,6 +117,25 @@ def replace_file(staging: Path, target: Path):
     if os.name != "nt" or not target.exists():
         os.replace(staging, target)
         return
+    backup = target.parent / f".ghostassist-env-{target.name}-{uuid4().hex}.backup"
+    try:
+        _replace_windows(staging, target, backup)
+    except OSError:
+        # ReplaceFileW error 1177 can leave the original under the backup name.
+        # Restore its identity and ACL, never replace it with the failed staging.
+        if not target.exists() and backup.exists():
+            os.replace(backup, target)
+        raise
+    else:
+        try:
+            backup.unlink(missing_ok=True)
+        except OSError:
+            # A committed save must not be reported as failed. The original's
+            # access-protected backup remains available for manual cleanup.
+            pass
+
+
+def _replace_windows(staging: Path, target: Path, backup: Path):
     import ctypes
     from ctypes import wintypes
 
@@ -123,5 +150,12 @@ def replace_file(staging: Path, target: Path):
     ]
     replace.restype = wintypes.BOOL
     # Do not use IGNORE_ACL_ERRORS: inability to preserve protection is a failure.
-    if not replace(str(target.resolve()), str(staging.resolve()), None, 0, None, None):
+    if not replace(
+        str(target.resolve()),
+        str(staging.resolve()),
+        str(backup.resolve()),
+        0,
+        None,
+        None,
+    ):
         raise ctypes.WinError(ctypes.get_last_error())

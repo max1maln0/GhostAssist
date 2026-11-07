@@ -162,3 +162,40 @@ $acl.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlS
                 update_env({"MEMORY_DEPTH": "4"}, self.path)
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(list(self.path.parent.glob(".ghostassist-env-*.tmp")), [])
+
+    @unittest.skipUnless(os.name == "nt", "requires Windows replacement policy")
+    def test_partial_native_replace_failure_restores_original_backup(self):
+        before = self.path.read_bytes()
+
+        def partial_failure(staging, target, backup):
+            os.replace(target, backup)
+            raise OSError(1177, "simulated native rename failure")
+
+        with patch("config.storage._replace_windows", side_effect=partial_failure):
+            with self.assertRaises(OSError):
+                update_env({"MEMORY_DEPTH": "4"}, self.path)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(list(self.path.parent.glob(".ghostassist-env-*")), [])
+
+    @unittest.skipUnless(os.name == "nt", "requires Windows replacement policy")
+    def test_failed_recovery_retains_original_backup(self):
+        before = self.path.read_bytes()
+        original_replace = os.replace
+
+        def partial_failure(staging, target, backup):
+            original_replace(target, backup)
+            raise OSError(1177, "simulated native rename failure")
+
+        with (
+            patch("config.storage._replace_windows", side_effect=partial_failure),
+            patch("config.storage.os.replace", side_effect=PermissionError()),
+        ):
+            with self.assertRaises(OSError):
+                update_env({"MEMORY_DEPTH": "4"}, self.path)
+        backups = list(self.path.parent.glob(".ghostassist-env-*.backup"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), before)
+        with self.assertRaises(OSError):
+            load_settings(self.path)
+        with self.assertRaises(OSError):
+            update_env({"MEMORY_DEPTH": "4"}, self.path)

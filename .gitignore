@@ -4,6 +4,7 @@
 !.env.example
 # Временные копии dotenv могут остаться после аварийного завершения.
 .ghostassist-env-*.tmp
+.ghostassist-env-*.backup
 .env.lock
 *.env.lock
 
