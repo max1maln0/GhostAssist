@@ -75,13 +75,13 @@ class CaptureTests(unittest.TestCase):
             app = SimpleNamespace(
                 settings=settings,
                 active_hotkey=None,
-                _save=Mock(),
+                request_save=Mock(),
                 _end_hotkey_capture=Mock(),
                 hotkey_buttons={"HOTKEY_DASHBOARD": Mock()},
             )
-            with patch("ui.dashboard.messagebox.showwarning") as warning:
+            with patch("ui.dashboard_hotkeys.messagebox.showwarning") as warning:
                 DashboardApp._reset_hotkey(app, "HOTKEY_DASHBOARD")
-            app._save.assert_not_called()
+            app.request_save.assert_not_called()
             self.assertIn("Фуллскрин скрин", warning.call_args.args[1])
 
     def test_reset_saves_configured_default(self):
@@ -90,12 +90,15 @@ class CaptureTests(unittest.TestCase):
             app = SimpleNamespace(
                 settings=settings,
                 active_hotkey=None,
-                _save=Mock(return_value=True),
+                request_save=Mock(side_effect=lambda values, done: done(True)),
                 _end_hotkey_capture=Mock(),
                 hotkey_buttons={"HOTKEY_DASHBOARD": Mock()},
             )
             DashboardApp._reset_hotkey(app, "HOTKEY_DASHBOARD")
-            app._save.assert_called_once_with(HOTKEY_DASHBOARD="<ctrl>+<shift>+<f9>")
+            self.assertEqual(
+                app.request_save.call_args.args[0],
+                {"HOTKEY_DASHBOARD": "<ctrl>+<shift>+<f9>"},
+            )
             app.hotkey_buttons["HOTKEY_DASHBOARD"].configure.assert_called_once_with(
                 text="Ctrl + Shift + F9"
             )

@@ -65,12 +65,11 @@ class BackgroundTests(unittest.TestCase):
     def test_cannot_hide_before_tray_is_ready(self):
         app = SimpleNamespace(
             tray=SimpleNamespace(ready=threading.Event()),
-            _end_hotkey_capture=Mock(),
+            set_error=Mock(),
             withdraw=Mock(),
         )
-        with patch("ui.dashboard.messagebox.showwarning") as warning:
-            DashboardApp.hide_dashboard(app)
-        warning.assert_called_once()
+        DashboardApp.hide_dashboard(app)
+        app.set_error.assert_called_once()
         app.withdraw.assert_not_called()
 
     def test_exit_request_is_not_lost_when_queue_full(self):
@@ -86,92 +85,77 @@ class BackgroundTests(unittest.TestCase):
         self.assertTrue(app.exit_requested.is_set())
 
     def test_dashboard_preferences_do_not_restart_service(self):
-        initial = SimpleNamespace(hotkey_dashboard="<ctrl>+<shift>+<f9>")
-        updated = SimpleNamespace(hotkey_dashboard="<alt>+<home>")
-        listener = Mock()
-        app = SimpleNamespace(
-            settings=initial,
-            assistant_process=Mock(),
-            restart_pending=False,
-            _stop_process=Mock(),
-            _create_dashboard_hotkey=Mock(return_value=listener),
-            _replace_dashboard_hotkey=Mock(),
-        )
-        app.assistant_process.poll.return_value = None
-        with patch("ui.dashboard.Settings", side_effect=[initial, updated]):
-            with (
-                patch("ui.dashboard.update_env"),
-                patch("ui.dashboard.validate_hotkeys"),
-            ):
-                self.assertTrue(DashboardApp._save(app, CLOSE_TO_TRAY="false"))
-                self.assertTrue(
-                    DashboardApp._save(app, HOTKEY_DASHBOARD="<alt>+<home>")
-                )
-        app._stop_process.assert_not_called()
-        app._replace_dashboard_hotkey.assert_called_once_with(listener)
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
 
-    def test_service_hotkey_and_profile_changes_schedule_managed_restart(self):
-        initial = Settings(_env_file=None)
-        for values in ({"HOTKEY_SCREEN": "<alt>+z"}, {"ACTIVE_PROFILE": "other.md"}):
-            with self.subTest(values=values):
-                process = Mock()
-                process.poll.return_value = None
-                app = SimpleNamespace(
-                    settings=initial,
-                    assistant_process=process,
-                    restart_pending=False,
-                    _stop_process=Mock(),
+        from dashboard_test_support import TransactionHarness, finish
+
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            app = TransactionHarness(Path(directory) / ".env")
+            listener = Mock()
+            app.prepare_hotkeys.return_value = listener
+            self.assertTrue(
+                app.request_save(
+                    {"CLOSE_TO_TRAY": "false", "HOTKEY_DASHBOARD": "<alt>+<home>"}
                 )
-                with (
-                    patch.dict(os.environ, {}, clear=True),
-                    patch("ui.dashboard.Settings", return_value=initial),
-                    patch("ui.dashboard.validate_hotkeys"),
-                    patch("ui.dashboard.update_env"),
-                ):
-                    self.assertTrue(DashboardApp._save(app, **values))
-                self.assertTrue(app.restart_pending)
-                app._stop_process.assert_called_once()
+            )
+            finish(app.save_jobs)
+            self.assertFalse(app.settings.close_to_tray)
+            app._replace_dashboard_hotkey.assert_called_once_with(listener)
+            app._stop_process.assert_not_called()
+            app.save_jobs.close()
+
+    def test_service_changes_require_explicit_apply(self):
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        from dashboard_test_support import TransactionHarness, finish
+
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            app = TransactionHarness(Path(directory) / ".env")
+            app.request_save({"HOTKEY_SCREEN": "<alt>+z", "ACTIVE_PROFILE": "other.md"})
+            finish(app.save_jobs)
+            self.assertEqual(app.settings.hotkey_screen, "<alt>+z")
+            self.assertEqual(app.settings.active_profile, "other.md")
+            self.assertFalse(app.restart_pending)
+            app._stop_process.assert_not_called()
+            app.save_jobs.close()
 
     def test_hotkey_registration_failure_does_not_save(self):
-        initial = SimpleNamespace(hotkey_dashboard="<ctrl>+<shift>+<f9>")
-        candidate = SimpleNamespace(hotkey_dashboard="<alt>+<home>")
-        app = SimpleNamespace(
-            settings=initial,
-            assistant_process=None,
-            _create_dashboard_hotkey=Mock(side_effect=OSError),
-        )
-        with patch("ui.dashboard.Settings", return_value=candidate):
-            with (
-                patch("ui.dashboard.validate_hotkeys"),
-                patch("ui.dashboard.update_env") as write,
-            ):
-                with patch("ui.dashboard.messagebox.showerror"):
-                    self.assertFalse(
-                        DashboardApp._save(app, HOTKEY_DASHBOARD="<alt>+<home>")
-                    )
-        write.assert_not_called()
-        self.assertIs(app.settings, initial)
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        from dashboard_test_support import TransactionHarness, finish
+
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            app = TransactionHarness(Path(directory) / ".env")
+            initial = app.settings
+            app.prepare_hotkeys.side_effect = OSError("private detail")
+            with patch("ui.dashboard_settings.update_env") as write:
+                app.request_save({"HOTKEY_DASHBOARD": "<alt>+<home>"})
+                finish(app.save_jobs)
+            write.assert_not_called()
+            self.assertIs(app.settings, initial)
+            self.assertNotIn("private", app.set_error.call_args.args[0])
+            app.save_jobs.close()
 
     def test_failed_write_stops_prepared_hotkey(self):
-        initial = SimpleNamespace(hotkey_dashboard="<ctrl>+<shift>+<f9>")
-        candidate = SimpleNamespace(hotkey_dashboard="<alt>+<home>")
-        listener = Mock()
-        app = SimpleNamespace(
-            settings=initial,
-            assistant_process=None,
-            _create_dashboard_hotkey=Mock(return_value=listener),
-        )
-        with patch("ui.dashboard.Settings", return_value=candidate):
-            with (
-                patch("ui.dashboard.validate_hotkeys"),
-                patch("ui.dashboard.update_env", side_effect=OSError),
-            ):
-                with patch("ui.dashboard.messagebox.showerror"):
-                    self.assertFalse(
-                        DashboardApp._save(app, HOTKEY_DASHBOARD="<alt>+<home>")
-                    )
-        listener.stop.assert_called_once()
-        self.assertIs(app.settings, initial)
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        from dashboard_test_support import TransactionHarness, finish
+
+        with TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            app = TransactionHarness(Path(directory) / ".env")
+            initial = app.settings
+            listener = Mock()
+            app.prepare_hotkeys.return_value = listener
+            with patch("ui.dashboard_settings.update_env", side_effect=OSError):
+                app.request_save({"HOTKEY_DASHBOARD": "<alt>+<home>"})
+                finish(app.save_jobs)
+            listener.stop.assert_called_once()
+            self.assertIs(app.settings, initial)
+            app.save_jobs.close()
 
     def test_hotkey_event_is_queued(self):
         from queue import Queue

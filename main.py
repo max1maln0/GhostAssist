@@ -1,10 +1,11 @@
+import json
 import os
 import sys
 from queue import Empty, Full, Queue
 from threading import Event, Thread
 from time import monotonic
 
-from config.settings import load_settings, validate_hotkeys
+from config.settings import load_settings, service_signature, validate_hotkeys
 from core.controller import ApplicationController, ViewKind
 from platform_adapters.windows.composition import build_dependencies, configure_dpi
 from platform_adapters.windows.single_instance import SingleInstance
@@ -148,6 +149,8 @@ class GhostAssistApp:
                 break
             if event.kind is ViewKind.DISPLAY:
                 self.hud.update_text(event.text, event.status)
+                if self.managed and event.status and event.status.startswith("ОШИБКА"):
+                    print("GHOST_ERROR task", flush=True)
             elif event.kind is ViewKind.SELECT and not self.closing:
                 if not self._select(event.task_id):
                     break
@@ -164,6 +167,22 @@ class GhostAssistApp:
             elif event.kind is ViewKind.DISMISS:
                 self._dismiss()
         if self.managed:
+            state = (
+                self.controller.context.mode,
+                bool(self.hud.is_visible),
+                bool(self.hud.is_docked_top),
+                bool(
+                    self.controller.monitoring
+                    or (
+                        self.controller.active
+                        and self.controller.active.kind == "audio"
+                        and not self.controller.active.stop.is_set()
+                    )
+                ),
+            )
+            if state != getattr(self, "_last_state", None):
+                self._last_state = state
+                print("GHOST_STATE " + json.dumps(state), flush=True)
             counts = tuple(
                 len(self.sessions.snapshot(mode)[1]) for mode in ("TEST", "INTERVIEW")
             )
@@ -201,6 +220,12 @@ class GhostAssistApp:
                     self.hotkeys_suspended.set()
                 elif command == b"R":
                     self.hotkeys_suspended.clear()
+                elif command == b"H":
+                    self.enqueue(self.hud.toggle_visibility)
+                elif command == b"D":
+                    self.enqueue(self.hud.toggle_dock_position)
+                elif command == b"M":
+                    self.enqueue(self.switch_mode)
         except OSError:
             pass
         self.enqueue(self.close)
@@ -242,6 +267,18 @@ class GhostAssistApp:
             self.listeners[0].start_verified()
             self.listeners[1].start()
             if managed:
+                print(
+                    "GHOST_READY "
+                    + json.dumps(
+                        {
+                            "signature": service_signature(settings),
+                            "generation": settings.resolve_binding("generation"),
+                            "transcription": settings.resolve_binding("transcription"),
+                            "vad": settings.vad_enabled,
+                        }
+                    ),
+                    flush=True,
+                )
                 Thread(
                     target=self.watch_parent, args=(sys.stdin.fileno(),), daemon=True
                 ).start()

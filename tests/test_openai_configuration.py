@@ -174,21 +174,33 @@ class OpenAIConfigurationTests(unittest.TestCase):
         ):
             self.assertEqual(run_service(), 0)
             app.assert_called_once_with(settings)
+        from dashboard_test_support import finish
+
+        from config.settings import ENV_FILE
+        from ui.dashboard_jobs import JobRunner
+
         dashboard = SimpleNamespace(
-            settings=None,
-            assistant_process=None,
-            session_status=Mock(),
-            _show_status=Mock(),
+            closing=False,
+            service_state="stopped",
+            _service_running=Mock(return_value=False),
+            save_jobs=JobRunner(),
+            integrations=True,
+            settings_path=ENV_FILE,
+            refresh_summary=Mock(),
+            set_error=Mock(),
+            service_updates=Mock(),
         )
         with (
-            patch("ui.dashboard.load_settings", return_value=settings),
-            patch("ui.dashboard.validate_hotkeys"),
-            patch("ui.dashboard.SingleInstance.exists", return_value=False),
-            patch("ui.dashboard.subprocess.Popen") as popen,
-            patch("ui.dashboard.Thread"),
+            patch("ui.dashboard_service.load_settings", return_value=settings),
+            patch("ui.dashboard_service.SingleInstance.exists", return_value=False),
+            patch("ui.dashboard_service.subprocess.Popen") as popen,
+            patch("ui.dashboard_service.Thread"),
         ):
             DashboardApp.toggle_assistant_process(dashboard)
+            finish(dashboard.save_jobs)
             popen.assert_called_once()
+            self.assertEqual(dashboard.service_state, "starting")
+        dashboard.save_jobs.close()
 
     def test_missing_selected_key_blocks_service_without_printing_values(self):
         settings = Settings(

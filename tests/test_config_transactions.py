@@ -42,9 +42,15 @@ for n in range(8):
             )
             for i in range(6)
         ]
-        for process in processes:
-            _, error = process.communicate(timeout=30)
-            self.assertEqual(process.returncode, 0, error.decode(errors="replace"))
+        try:
+            for process in processes:
+                _, error = process.communicate(timeout=30)
+                self.assertEqual(process.returncode, 0, error.decode(errors="replace"))
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=5)
         values = dotenv_values(self.path)
         self.assertEqual(values["GEMINI_API_KEY"], "private-test-key")
         self.assertEqual(values["SCHEMA_VERSION"], "2")

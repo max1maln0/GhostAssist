@@ -34,66 +34,73 @@ class ProfilePersistenceTests(unittest.TestCase):
 
 class DashboardRecoveryTests(unittest.TestCase):
     def test_environment_override_is_not_silently_saved(self):
-        app = SimpleNamespace(settings=Mock())
+        from config.settings import Settings
+        from ui.dashboard_actions import safe_save
+
         with (
             patch.dict(os.environ, {"VAD_ENABLED": "true"}),
-            patch("ui.dashboard.messagebox.showerror") as error,
-            patch("ui.dashboard.update_env") as update,
+            patch("ui.dashboard_settings.update_env") as update,
         ):
-            self.assertFalse(DashboardApp._save(app, VAD_ENABLED="false"))
+            result = safe_save(
+                Settings(_env_file=None),
+                {"VAD_ENABLED": "false"},
+                Path("unused.env"),
+                None,
+            )
         update.assert_not_called()
-        self.assertIn("VAD_ENABLED", error.call_args.args[1])
+        self.assertIn("VAD_ENABLED", result.error)
 
     def test_profile_selection_does_not_change_editor_when_save_fails(self):
         app = SimpleNamespace(
-            settings=SimpleNamespace(active_profile="old.md"),
+            loaded_profile="old.md",
             profile_selector=Mock(),
             legend_textbox=Mock(),
-            _save=Mock(return_value=False),
+            guard_profile=Mock(return_value=False),
         )
-        with patch("ui.dashboard.profile_path") as path:
-            path.return_value.read_text.return_value = "new profile"
-            DashboardApp.load_selected_profile(app, "new.md")
+        DashboardApp.load_selected_profile(app, "new.md")
         app.profile_selector.set.assert_called_once_with("old.md")
         app.legend_textbox.delete.assert_not_called()
-        app.legend_textbox.insert.assert_not_called()
 
-    def test_failed_switch_and_selector_save_restores_previous_values(self):
-        app = SimpleNamespace(
-            settings=SimpleNamespace(vad_enabled=False, audio_device="Headset"),
-            vad_switch=Mock(),
-            device_combo=Mock(),
-            _save=Mock(return_value=False),
-            _restore_switch=DashboardApp._restore_switch,
-        )
-        app.vad_switch.get.return_value = 1
-        DashboardApp._on_vad_changed(app)
-        app.vad_switch.deselect.assert_called_once()
-        DashboardApp._on_device_changed(app, "Другой")
-        app.device_combo.set.assert_called_once_with("Headset")
+    def test_failed_save_preserves_saved_values_and_draft(self):
+        from dashboard_test_support import TransactionHarness, finish
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            app = TransactionHarness(Path(directory) / ".env")
+            app.draft.changes = {"VAD_ENABLED": "true", "AUDIO_DEVICE": "Headset"}
+            with patch("ui.dashboard_settings.update_env", side_effect=PermissionError):
+                app.request_save()
+                finish(app.save_jobs)
+            self.assertFalse(app.settings.vad_enabled)
+            self.assertEqual(app.draft.changes["AUDIO_DEVICE"], "Headset")
+            app.sync_form.assert_not_called()
+            app.save_jobs.close()
 
     def test_unexpected_device_scan_failure_returns_result(self):
-        from queue import Queue
-        from threading import Event
+        from dashboard_test_support import finish
 
-        completed = Event()
+        from ui.dashboard_jobs import JobRunner
+
+        variable = Mock()
+        variable.get.return_value = ""
         app = SimpleNamespace(
-            device_refreshing=False,
+            device_jobs=JobRunner(),
             refresh_devices_button=Mock(),
-            device_updates=Queue(maxsize=1),
             audio_capture=Mock(),
+            variable=Mock(return_value=variable),
+            device_combo=Mock(),
+            device_status=Mock(),
         )
-
-        def fail():
-            completed.set()
-            raise RuntimeError("sensitive details")
-
-        with patch.object(app.audio_capture, "list_devices", side_effect=fail):
-            DashboardApp._refresh_devices(app)
-            self.assertTrue(completed.wait(2))
-            devices, error = app.device_updates.get(timeout=2)
-        self.assertEqual(devices, [])
-        self.assertNotIn("sensitive", error)
+        app.audio_capture.list_devices.side_effect = RuntimeError("sensitive details")
+        DashboardApp._refresh_devices(app)
+        finish(app.device_jobs)
+        self.assertNotIn(
+            "sensitive", app.device_status.configure.call_args.kwargs["text"]
+        )
+        app.refresh_devices_button.configure.assert_called_with(state="normal")
+        app.device_jobs.close()
 
 
 if __name__ == "__main__":
