@@ -31,12 +31,14 @@ class BoundGeneration:
         started = monotonic()
         check_cancelled(cancel)
         self.registry.validate(self.binding, request)
+        remaining_request(request, started)
         with self.registry.acquire(self.binding) as provider:
             check_cancelled(cancel)
 
             def forward(text):
                 check_cancelled(cancel)
                 self.registry.describe(self.binding.provider_id)
+                remaining_request(request, started)
                 publish(text)
 
             try:
@@ -52,6 +54,7 @@ class BoundGeneration:
                 ) from None
             check_cancelled(cancel)
             self.registry.describe(self.binding.provider_id)
+            remaining_request(request, started)
             return result
 
 
@@ -71,6 +74,7 @@ class BoundTranscription:
             instruction=TRANSCRIPTION_INSTRUCTION,
         )
         self.registry.validate(self.binding, validation, transcription=True)
+        remaining_request(request, started)
         with self.registry.acquire(self.binding, transcription=True) as provider:
             check_cancelled(cancel)
             try:
@@ -85,6 +89,7 @@ class BoundTranscription:
                 ) from None
             check_cancelled(cancel)
             self.registry.describe(self.binding.provider_id)
+            remaining_request(request, started)
             return result
 
 

@@ -78,6 +78,7 @@ class RegistryIntegrationTests(unittest.TestCase):
         self.assertEqual(self.created["answer"], [])
         self.assertTrue(self.app.confirm(identifier, "edited question"))
         views = self.finish()
+        self.assertTrue(any(v.status == "ГЕНЕРАЦИЯ ОТВЕТА" for v in views))
         self.assertEqual(self.created["answer"][0][0], "answer-model")
         self.assertEqual(self.created["speech"][0][0], "speech-model")
         generation = self.created["answer"][0][1]

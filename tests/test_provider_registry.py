@@ -1,9 +1,8 @@
 import threading
-import time
 import unittest
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from mock_provider import MockProvider
 
@@ -348,17 +347,15 @@ class RegistryTests(unittest.TestCase):
 
     def test_factory_time_counts_against_budget_and_cancel_prevents_call(self):
         provider = MockProvider()
-
-        def create(model):
-            time.sleep(0.02)
-            return provider
-
-        self.factory.side_effect = create
+        self.factory.side_effect = lambda model: provider
         request = replace(REQUEST, timeout=0.001)
-        self.assert_code(
-            ProviderErrorCode.TIMEOUT,
-            lambda: self.bound.generate_response(request, lambda _: None, self.cancel),
-        )
+        with patch("core.provider_routing.monotonic", side_effect=[0, 0, 1]):
+            self.assert_code(
+                ProviderErrorCode.TIMEOUT,
+                lambda: self.bound.generate_response(
+                    request, lambda _: None, self.cancel
+                ),
+            )
         self.assertEqual(provider.generation_requests, [])
         self.assertEqual(provider.close_count, 1)
 
@@ -369,6 +366,31 @@ class RegistryTests(unittest.TestCase):
         self.factory.side_effect = cancel_factory
         self.assert_code(ProviderErrorCode.CANCELLED, self.generate)
         self.assertEqual(provider.generation_requests, [])
+        self.assertEqual(provider.close_count, 2)
+
+    def test_expired_budget_never_creates_client(self):
+        for timeout in (0, -1):
+            request = replace(REQUEST, timeout=timeout)
+            self.assert_code(
+                ProviderErrorCode.TIMEOUT,
+                lambda r=request: self.bound.generate_response(
+                    r, lambda _: None, self.cancel
+                ),
+            )
+        self.factory.assert_not_called()
+
+    def test_provider_ignoring_deadline_cannot_deliver_late_result(self):
+        provider = MockProvider()
+
+        def generate(request, publish, cancel):
+            return SimpleNamespace(text="late")
+
+        provider.generate_response = generate
+        self.factory.side_effect = None
+        self.factory.return_value = provider
+        with patch("core.provider_routing.monotonic", side_effect=[0, 0, 0, 2]):
+            self.assert_code(ProviderErrorCode.TIMEOUT, self.generate)
+        self.assertEqual(provider.close_count, 1)
 
     def test_transcription_failure_and_cancellation_close_once(self):
         provider = MockProvider(error=ProviderErrorCode.TIMEOUT)

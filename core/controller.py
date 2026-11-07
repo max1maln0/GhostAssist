@@ -236,7 +236,7 @@ class ApplicationController:
             return False
         operation = self.active
         operation.question = question.strip()
-        self._display(question, "ЗАПРОС GEMINI")
+        self._display(question, "ГЕНЕРАЦИЯ ОТВЕТА")
 
         def work(request, cancel, publish):
             return self.dependencies.llm.generate(
@@ -315,7 +315,7 @@ class ApplicationController:
             ):
                 continue
             if event.status is TaskStatus.CHUNK:
-                self._display(event.text, "ЗАПРОС GEMINI")
+                self._display(event.text, "ГЕНЕРАЦИЯ ОТВЕТА")
             elif event.status is TaskStatus.PROGRESS:
                 self._display(status=event.text)
             elif event.status is TaskStatus.WAITING:
