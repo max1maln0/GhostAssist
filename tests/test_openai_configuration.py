@@ -16,6 +16,21 @@ from ui.dashboard import DashboardApp
 
 
 class OpenAIConfigurationTests(unittest.TestCase):
+    def test_save_cannot_upgrade_invalid_legacy_values_hidden_by_environment(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.dict(os.environ, {"AUDIO_MAX_SECONDS": "10"}),
+        ):
+            path = Path(directory) / ".env"
+            original = b"SCHEMA_VERSION=1\nAUDIO_MAX_SECONDS=500\n"
+            path.write_bytes(original)
+            with self.assertRaises(ValidationError):
+                update_env({"MEMORY_DEPTH": "3"}, path)
+            self.assertEqual(path.read_bytes(), original)
+            update_env({"AUDIO_MAX_SECONDS": "10"}, path)
+            self.assertEqual(load_settings(path).schema_version, 2)
+            self.assertIn("AUDIO_MAX_SECONDS='10'", path.read_text(encoding="utf-8"))
+
     def test_v1_migration_preserves_all_values_comments_and_is_idempotent(self):
         with (
             tempfile.TemporaryDirectory() as directory,

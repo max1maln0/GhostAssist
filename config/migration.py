@@ -43,11 +43,18 @@ def _migrate_env(path: Path) -> bool:
     version = read_version(path)
     if version == SCHEMA_VERSION or not path.exists():
         return False
-    # Validate the file independently of overrides: environment must not conceal
-    # malformed or future-version persisted data. No values are printed.
+    from config.env_file import update_env
+
+    validate_persisted(path)
+    update_env({"SCHEMA_VERSION": str(SCHEMA_VERSION)}, path)
+    return True
+
+
+def validate_persisted(path: Path, updates=None):
+    # Environment must not conceal malformed persisted fields. A selected field
+    # can still be repaired explicitly by the same atomic update.
     from dotenv import dotenv_values
 
-    from config.env_file import update_env
     from config.settings import Settings
 
     data = {
@@ -57,6 +64,5 @@ def _migrate_env(path: Path) -> bool:
         ).items()
         if value is not None
     }
+    data.update({key.lower(): value for key, value in (updates or {}).items()})
     Settings(_env_file=None, **data)
-    update_env({"SCHEMA_VERSION": str(SCHEMA_VERSION)}, path)
-    return True

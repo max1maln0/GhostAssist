@@ -27,6 +27,7 @@ class PlatformTests(unittest.TestCase):
             "platform_adapters",
             "providers",
             "google",
+            "openai",
             "tkinter",
             "customtkinter",
         }
