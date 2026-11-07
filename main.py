@@ -124,7 +124,12 @@ class GhostAssistApp:
         self.future = self.screenshots.future
 
     def snip(self):
-        if self.screenshot_id is not None:
+        if (
+            self.screenshot_id is not None
+            or self.monitoring
+            or self.capture_future is not None
+            or self.segments is not None
+        ):
             return
         task = self.tasks.begin(State.CAPTURING)
         if not task:
@@ -404,6 +409,8 @@ class GhostAssistApp:
             if self.future.done():
                 try:
                     result = self.future.result()
+                    if self.cancel_requested.is_set() or self.close_requested.is_set():
+                        self.cancel()
                     if not task.cancel.is_set() and isinstance(result, tuple):
                         self.show_transcript(task, result[1])
                         task.state = State.REVIEW

@@ -1,6 +1,6 @@
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import main
 from config.settings import Settings
@@ -293,6 +293,43 @@ class AppTests(unittest.TestCase):
                 self.assertIsNone(self.app.capture_future)
                 self.assertIsNone(self.app.segments)
                 self.assertIs(self.app.tasks.state, State.IDLE)
+
+    def test_snipping_is_blocked_while_vad_capture_active(self):
+        self.app.settings.vad_enabled = True
+        entered = threading.Event()
+
+        def record(stop, cancel, seconds, max_bytes, device, **kwargs):
+            entered.set()
+            stop.wait(2)
+            return b""
+
+        with patch.object(self.app.audio_capture, "record", side_effect=record):
+            with patch("main.SnippingOverlay") as overlay:
+                self.app.audio()
+                self.assertTrue(entered.wait(1))
+                self.app.snip()
+                overlay.assert_not_called()
+                future = self.app.capture_future
+                self.app.cancel()
+                future.result(2)
+                self.app.poll()
+
+    def test_pending_cancel_discards_legacy_task_result_before_delivery(self):
+        task = self.app.tasks.begin(State.PROCESSING)
+        generation, _ = self.app.sessions.snapshot("TEST")
+        self.app.session_task = (task, "TEST", generation)
+
+        def result():
+            self.app.cancel_requested.set()
+            return "Вопрос: Частный?\nОтвет: Поздний"
+
+        self.app.future = Mock()
+        self.app.future.done.return_value = True
+        self.app.future.result.side_effect = result
+        self.app.poll()
+        self.assertTrue(task.cancel.is_set())
+        self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
+        self.assertNotIn("Поздний", str(self.app.hud.update_text.call_args_list))
 
     def test_vad_segment_reaches_transcription_review(self):
         self.app.settings.vad_enabled = True
