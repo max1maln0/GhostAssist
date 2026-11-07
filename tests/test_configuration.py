@@ -108,3 +108,14 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 load_settings(self.path)
         self.assertEqual(self.path.read_bytes(), before)
+
+    def test_version_case_is_consistent_with_settings_loading(self):
+        self.path.write_text("schema_version=9\n", encoding="utf-8")
+        with self.assertRaises(ConfigurationError):
+            load_settings(self.path)
+        self.path.write_text("schema_version=1\n", encoding="utf-8")
+        update_env({"MEMORY_DEPTH": "3"}, self.path)
+        self.assertEqual(load_settings(self.path).memory_depth, 3)
+        self.assertEqual(
+            self.path.read_text(encoding="utf-8").upper().count("SCHEMA_VERSION"), 1
+        )

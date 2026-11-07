@@ -40,7 +40,12 @@ def update_env(values: dict[str, str], path: Path = ENV_FILE):
                 with path.open(encoding="utf-8-sig", newline="") as source:
                     for entry in parse_stream(source):
                         original = entry.original.string
-                        if entry.key not in values:
+                        key = (
+                            "SCHEMA_VERSION"
+                            if entry.key and entry.key.upper() == "SCHEMA_VERSION"
+                            else entry.key
+                        )
+                        if key not in values:
                             output.write(original)
                             continue
                         leading = original[: len(original) - len(original.lstrip())]
@@ -48,11 +53,9 @@ def update_env(values: dict[str, str], path: Path = ENV_FILE):
                         newline = original[len(content) :] or "\n"
                         match = INLINE_COMMENT.fullmatch(content)
                         comment = match["comment"] if match else ""
-                        output.write(
-                            leading + _assignment(entry.key, values[entry.key])
-                        )
+                        output.write(leading + _assignment(key, values[key]))
                         output.write(comment + newline)
-                        pending.pop(entry.key, None)
+                        pending.pop(key, None)
             if pending:
                 if output.tell():
                     output.write("\n")

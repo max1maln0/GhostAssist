@@ -20,7 +20,7 @@ def read_version(path: Path) -> int:
             for binding in parse_stream(source):
                 if binding.error:
                     raise ConfigurationError("Некорректный синтаксис .env.")
-                if binding.key == "SCHEMA_VERSION":
+                if binding.key and binding.key.upper() == "SCHEMA_VERSION":
                     versions.append(binding.value)
     except UnicodeError:
         raise ConfigurationError("Файл .env должен иметь кодировку UTF-8.") from None
