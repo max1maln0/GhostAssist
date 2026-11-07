@@ -20,8 +20,15 @@ class MockProvider:
         self.chunks = chunks
         self.delay = delay
         self.error = error
+        self.close_count = 0
+        self.generation_requests = []
+        self.transcription_requests = []
+
+    def close(self):
+        self.close_count += 1
 
     def generate_response(self, request, publish, cancel):
+        self.generation_requests.append(request)
         if cancel.is_set():
             raise ProviderError(ProviderErrorCode.CANCELLED, "Cancelled")
         if request.timeout is not None and request.timeout <= 0:
@@ -54,6 +61,7 @@ class MockProvider:
         return GenerationResult(answer)
 
     def transcribe_audio(self, request, cancel):
+        self.transcription_requests.append(request)
         if cancel.is_set():
             raise ProviderError(ProviderErrorCode.CANCELLED, "Cancelled")
         if not request.audio:

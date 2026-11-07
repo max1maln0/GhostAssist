@@ -16,6 +16,11 @@ class ProviderErrorCode(str, Enum):
     UNSUPPORTED_CAPABILITY = "unsupported_capability"
     CANCELLED = "cancelled"
     PROVIDER_ERROR = "provider_error"
+    UNKNOWN_PROVIDER = "unknown_provider"
+    INVALID_PROVIDER = "invalid_provider"
+    UNKNOWN_MODEL = "unknown_model"
+    UNKNOWN_CAPABILITY = "unknown_capability"
+    CLOSED = "closed"
 
 
 class ProviderError(RuntimeError):
@@ -69,3 +74,7 @@ class TranscriptionProvider(Protocol):
     def transcribe_audio(
         self, request: TranscriptionRequest, cancel: Cancellation
     ) -> TranscriptionResult: ...
+
+
+class ManagedProvider(Protocol):
+    def close(self) -> None: ...
