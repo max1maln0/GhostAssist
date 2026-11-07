@@ -161,12 +161,27 @@ class ServiceStatusLifecycleTests(unittest.TestCase):
     def test_crash_resets_status_and_sessions(self):
         app = self.app()
         app.assistant_process.poll.return_value = 7
+        app.assistant_process.stdin.close.side_effect = BrokenPipeError
         app.session_counts = (4, 2)
         ServiceActions._poll_process(app)
         self.assertEqual(app.service_state, "error")
         self.assertIsNone(app.assistant_process)
         self.assertEqual(app.session_counts, (0, 0))
         app.set_error.assert_called_once()
+
+    def test_restart_before_poll_reaps_dead_child_even_with_broken_pipe(self):
+        from pathlib import Path
+
+        app = self.app()
+        process = app.assistant_process
+        process.poll.return_value = 7
+        process.stdin.close.side_effect = BrokenPipeError
+        app.settings_path = Path("isolated-dashboard.env")
+        app.save_jobs.busy = False
+        ServiceActions.toggle_assistant_process(app)
+        process.stdin.close.assert_called_once()
+        self.assertIsNone(app.assistant_process)
+        self.assertEqual(app.service_state, "stopped")
 
     def test_exit_during_job_callback_never_touches_destroyed_widgets(self):
         app = self.app()

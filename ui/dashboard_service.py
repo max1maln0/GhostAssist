@@ -13,6 +13,13 @@ from platform_adapters.windows.single_instance import SingleInstance
 from ui.dashboard_settings import validate_bindings
 
 
+def close_input(process):
+    try:
+        process.stdin.close()
+    except (OSError, ValueError):
+        pass
+
+
 def parse_status(raw):
     """Accept only the fixed status protocol; never display arbitrary stdout."""
     try:
@@ -108,6 +115,12 @@ class ServiceActions:
         return bool(self.assistant_process and self.assistant_process.poll() is None)
 
     def toggle_assistant_process(self):
+        if self.assistant_process and self.assistant_process.poll() is not None:
+            close_input(self.assistant_process)
+            self.assistant_process = self.running_settings = self.applied = None
+            self.session_counts, self.live_state = (0, 0), None
+            self.stopping_until = self.start_deadline = None
+            self.service_state = "stopped"
         if self.closing or self.service_state in ("starting", "stopping"):
             return
         if self._service_running():
@@ -293,7 +306,7 @@ class ServiceActions:
         if process:
             code = process.poll()
             if code is not None:
-                process.stdin.close()
+                close_input(process)
                 self.assistant_process = None
                 self.running_settings = self.applied = None
                 self.session_counts = (0, 0)
