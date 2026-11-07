@@ -16,7 +16,7 @@ class ProfilePersistenceTests(unittest.TestCase):
             path.write_text("original", encoding="utf-8")
             with (
                 patch("core.profile_store.profile_path", return_value=path),
-                patch("core.profile_store.os.replace", side_effect=OSError("denied")),
+                patch("core.profile_store.replace_file", side_effect=OSError("denied")),
                 self.assertRaises(OSError),
             ):
                 write_profile("profile.md", "new content")

@@ -140,6 +140,20 @@ $acl.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlS
         )
         self.assertEqual(acl(self.path), expected)
         self.assertEqual(load_settings(self.path).memory_depth, 4)
+        # Profiles can contain private resumes and require the same guarantee.
+        from core.profile_store import write_profile
+
+        with (
+            patch("core.profile_store.profile_path", return_value=self.path),
+            patch("core.profile_store.protect_staging", side_effect=protect),
+        ):
+            write_profile("example.md", "private test profile")
+        self.assertEqual(len(staged), 2)
+        self.assertEqual(
+            staged[-1].replace("D:PAI", "D:P"), expected.replace("D:PAI", "D:P")
+        )
+        self.assertEqual(acl(self.path), expected)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), "private test profile")
 
     def test_staging_security_failure_leaves_original_untouched(self):
         before = self.path.read_bytes()
