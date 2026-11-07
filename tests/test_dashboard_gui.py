@@ -249,6 +249,7 @@ class DashboardGuiTests(unittest.TestCase):
     def test_label_wrap_uses_frame_width_and_scrollbar_updates_are_bounded(self):
         self.app.navigate("providers")
         self.app.update()
+        self.assertGreater(self.app.status_text.cget("wraplength"), 250)
         info = self.app.provider_controls["generation"][1]
         logical = int(info.winfo_width() / info._get_widget_scaling()) - 4
         self.assertAlmostEqual(info.cget("wraplength"), max(120, logical), delta=2)

@@ -161,7 +161,7 @@ class DashboardApp(
         )
         self.run_btn.grid(row=0, column=1, padx=(10, 0))
         self.status_text = label(header, "● Служба остановлена", muted=True, size=12)
-        self.status_text.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.status_text.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.content = ctk.CTkFrame(self, fg_color="transparent")
         self.content.grid(row=1, column=1, sticky="nsew", padx=(18, 16))
         self.content.grid_rowconfigure(0, weight=1)

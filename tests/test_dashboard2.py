@@ -56,6 +56,43 @@ class ServiceDashboardTests(unittest.TestCase):
         app.request_save.assert_not_called()
         app._stop_process.assert_not_called()
 
+    def test_parent_hud_and_mode_commands_only_enqueue_main_thread_actions(self):
+        import os
+        from threading import Thread
+
+        from main import GhostAssistApp
+
+        reader, writer = os.pipe()
+        app = SimpleNamespace(
+            enqueue=Mock(),
+            hud=SimpleNamespace(
+                toggle_visibility=object(), toggle_dock_position=object()
+            ),
+            switch_mode=object(),
+            close=object(),
+        )
+        thread = Thread(target=GhostAssistApp.watch_parent, args=(app, reader))
+        try:
+            thread.start()
+            os.write(writer, b"HDM")
+            os.close(writer)
+            writer = None
+            thread.join(2)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(
+                [call.args[0] for call in app.enqueue.call_args_list],
+                [
+                    app.hud.toggle_visibility,
+                    app.hud.toggle_dock_position,
+                    app.switch_mode,
+                    app.close,
+                ],
+            )
+        finally:
+            if writer is not None:
+                os.close(writer)
+            os.close(reader)
+
     def test_real_control_commands_are_allowlisted(self):
         process = Mock()
         app = SimpleNamespace(
