@@ -132,7 +132,7 @@ Dashboard показывает количество завершённых вз�
 | `ui/dashboard.py`, `ui/tray.py` | Настройки, трей и управление дочерним процессом |
 | `platform_adapters/windows/single_instance.py` | Ограничение экземпляров и сигнал восстановления Dashboard |
 | `ui/hotkey_capture.py` | Состояние интерактивного редактора сочетаний |
-| `ui/snipping_tool.py`, `ui/stealth_hud.py` | Выделение и вывод на главном потоке Tk |
+| `ui/snipping_tool.py`, `ui/stealth_hud.py`, `ui/transcript_review.py` | Выделение, HUD и проверка транскрипции на главном потоке Tk |
 
 ## Проверки
 
