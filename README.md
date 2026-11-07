@@ -121,15 +121,16 @@ Dashboard показывает количество завершённых вз�
 | Компонент | Роль |
 | --- | --- |
 | `main.py`, `core/task_state.py` | Хоткеи, очередь команд Tk, состояния задач и завершение |
-| `core/audio_worker.py` | Захват WASAPI и сборка WAV |
-| `core/llm_worker.py`, `core/provider_contracts.py` | Захват MSS/JPEG, совместимый фасад и независимые контракты AI |
+| `core/platform_contracts.py`, `core/audio_queue.py` | Контракты платформы и ограниченная очередь аудиосегментов |
+| `platform_adapters/windows/` | Захват MSS и WASAPI, глобальные обработчики, DPI и Windows mutex |
+| `core/llm_worker.py`, `core/provider_contracts.py` | Совместимый фасад и независимые контракты AI |
 | `providers/gemini.py`, `providers/gemini_client.py` | Поток Gemini, транскрипция, резервные модели и тайм-ауты |
 | `core/context_manager.py` | Режимы и инструкции с профилем |
 | `core/session_manager.py` | Ограниченная история взаимодействий в памяти |
 | `core/vad.py` | Определение границ речевых фрагментов |
 | `config/settings.py`, `config/env_file.py` | Загрузка, проверка и сохранение настроек |
 | `ui/dashboard.py`, `ui/tray.py` | Настройки, трей и управление дочерним процессом |
-| `core/single_instance.py` | Ограничение экземпляров и сигнал восстановления Dashboard |
+| `platform_adapters/windows/single_instance.py` | Ограничение экземпляров и сигнал восстановления Dashboard |
 | `ui/hotkey_capture.py` | Состояние интерактивного редактора сочетаний |
 | `ui/snipping_tool.py`, `ui/stealth_hud.py` | Выделение и вывод на главном потоке Tk |
 
@@ -138,9 +139,9 @@ Dashboard показывает количество завершённых вз�
 ```powershell
 python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
-python -m compileall -q config core providers ui tests main.py
-python -m ruff check config core providers ui tests main.py
-python -m ruff format --check config core providers ui tests main.py
+python -m compileall -q config core platform_adapters providers ui tests main.py
+python -m ruff check config core platform_adapters providers ui tests main.py
+python -m ruff format --check config core platform_adapters providers ui tests main.py
 ```
 
 Автоматические тесты используют моки Gemini и аудиоустройств: реальный ключ, платные запросы и оборудование для них не нужны. Они не заменяют проверку на Windows с настоящим устройством вывода. Вручную проверьте запись, отключение устройства, отмену во время генерации, трей и глобальные сочетания. Также проверьте выделение на нескольких мониторах с разным DPI, включая монитор слева или выше основного, и поведение HUD в используемом ПО захвата.
