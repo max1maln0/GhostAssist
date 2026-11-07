@@ -4,6 +4,8 @@
 !.env.example
 # Временные копии dotenv могут остаться после аварийного завершения.
 .ghostassist-env-*.tmp
+.env.lock
+*.env.lock
 
 # Личные профили и легенды (резюме, личные данные)
 config/profiles/*

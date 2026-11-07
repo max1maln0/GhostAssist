@@ -4,6 +4,8 @@ from pathlib import Path
 
 from dotenv.parser import parse_stream
 
+from config.storage import configuration_lock
+
 SCHEMA_VERSION = 1
 
 
@@ -33,6 +35,11 @@ def read_version(path: Path) -> int:
 
 def migrate_env(path: Path) -> bool:
     """Validate the complete persisted configuration before atomically upgrading."""
+    with configuration_lock(path):
+        return _migrate_env(path)
+
+
+def _migrate_env(path: Path) -> bool:
     version = read_version(path)
     if version == SCHEMA_VERSION or not path.exists():
         return False

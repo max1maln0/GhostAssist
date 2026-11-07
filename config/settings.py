@@ -129,11 +129,13 @@ class Settings(BaseSettings):
 
 def load_settings(path: Path = ENV_FILE):
     from config.migration import migrate_env, read_version
+    from config.storage import configuration_lock
 
-    read_version(path)
-    settings = Settings(_env_file=path)
-    migrate_env(path)
-    return settings
+    with configuration_lock(path):
+        read_version(path)
+        settings = Settings(_env_file=path)
+        migrate_env(path)
+        return settings
 
 
 HOTKEY_LABELS = {

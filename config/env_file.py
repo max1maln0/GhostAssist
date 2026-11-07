@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv.parser import parse_stream
 
 from config.settings import ENV_FILE
+from config.storage import configuration_lock, protect_staging, replace_file
 
 INLINE_COMMENT = re.compile(
     r"""^[\s]*?(?:export[ \t]+)?(?:'[^']+'|[^=\s]+)[ \t]*=[ \t]*"""
@@ -18,6 +19,11 @@ INLINE_COMMENT = re.compile(
 
 
 def update_env(values: dict[str, str], path: Path = ENV_FILE):
+    with configuration_lock(path):
+        _update_env(values, path)
+
+
+def _update_env(values: dict[str, str], path: Path):
     from config.migration import read_version
 
     read_version(path)
@@ -35,6 +41,7 @@ def update_env(values: dict[str, str], path: Path = ENV_FILE):
     ) as output:
         temp = Path(output.name)
         try:
+            protect_staging(path, temp)
             pending = dict(values)
             if path.exists():
                 with path.open(encoding="utf-8-sig", newline="") as source:
@@ -61,8 +68,10 @@ def update_env(values: dict[str, str], path: Path = ENV_FILE):
                     output.write("\n")
                 for key, value in pending.items():
                     output.write(_assignment(key, value) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
             output.close()
-            os.replace(temp, path)
+            replace_file(temp, path)
         finally:
             output.close()
             temp.unlink(missing_ok=True)

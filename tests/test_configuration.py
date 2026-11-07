@@ -76,11 +76,15 @@ class ConfigurationTests(unittest.TestCase):
     def test_failed_write_preserves_original_and_cleans_temporary_file(self):
         original = b"GEMINI_API_KEY='private-test-key'\n"
         self.path.write_bytes(original)
-        with patch("config.env_file.os.replace", side_effect=PermissionError("denied")):
+        with patch(
+            "config.env_file.replace_file", side_effect=PermissionError("denied")
+        ):
             with self.assertRaises(PermissionError):
                 load_settings(self.path)
         self.assertEqual(self.path.read_bytes(), original)
-        self.assertEqual(list(self.path.parent.iterdir()), [self.path])
+        self.assertEqual(
+            sorted(p.name for p in self.path.parent.iterdir()), [".env", ".env.lock"]
+        )
 
     def test_environment_precedence_and_raw_file_version(self):
         self.path.write_text("GEMINI_MODEL=file-model\n", encoding="utf-8")

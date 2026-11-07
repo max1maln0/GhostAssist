@@ -423,12 +423,14 @@ class SettingsTests(unittest.TestCase):
                 temporary_names.append(Path(source).name)
                 raise OSError("replace failed")
 
-            with patch("config.env_file.os.replace", side_effect=fail):
+            with patch("config.env_file.replace_file", side_effect=fail):
                 with self.assertRaises(OSError):
                     update_env({"EXISTING": "two"}, env)
             self.assertTrue(temporary_names[0].startswith(".ghostassist-env-"))
             self.assertTrue(temporary_names[0].endswith(".tmp"))
-            self.assertEqual(list(Path(tmp).iterdir()), [env])
+            self.assertEqual(
+                sorted(p.name for p in Path(tmp).iterdir()), [".env", ".env.lock"]
+            )
             self.assertEqual(env.read_text(encoding="utf-8"), "EXISTING=one\n")
 
     def test_load_validate_and_preserve_dotenv(self):

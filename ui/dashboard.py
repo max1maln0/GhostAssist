@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from config.env_file import update_env
 from config.migration import ConfigurationError
 from config.settings import (
+    ENV_FILE,
     GEMINI_MODELS,
     HOTKEY_LABELS,
     PROFILES,
@@ -25,6 +26,7 @@ from config.settings import (
     profile_path,
     validate_hotkeys,
 )
+from config.storage import configuration_lock
 from core.profile_store import write_profile
 from platform_adapters.windows.audio import WindowsAudioCapture
 from platform_adapters.windows.hotkeys import WindowsHotkeyBackend
@@ -780,22 +782,23 @@ class DashboardApp(ctk.CTk):
                         parent=self,
                     )
                     return False
-            candidate = Settings(
-                **{key.lower(): value for key, value in values.items()}
-            )
-            hotkeys = {
-                key.lower(): value
-                for key, value in values.items()
-                if key.startswith("HOTKEY_")
-            }
-            if hotkeys:
-                validate_hotkeys(candidate, hotkeys)
-            if (
-                "HOTKEY_DASHBOARD" in values
-                and candidate.hotkey_dashboard != self.settings.hotkey_dashboard
-            ):
-                prepared = self._create_dashboard_hotkey(candidate)
-            update_env(values)
+            with configuration_lock(ENV_FILE, timeout=0.05):
+                candidate = Settings(
+                    **{key.lower(): value for key, value in values.items()}
+                )
+                hotkeys = {
+                    key.lower(): value
+                    for key, value in values.items()
+                    if key.startswith("HOTKEY_")
+                }
+                if hotkeys:
+                    validate_hotkeys(candidate, hotkeys)
+                if (
+                    "HOTKEY_DASHBOARD" in values
+                    and candidate.hotkey_dashboard != self.settings.hotkey_dashboard
+                ):
+                    prepared = self._create_dashboard_hotkey(candidate)
+                update_env(values)
         except HotkeyValidationError as exc:
             messagebox.showwarning("Хоткей", str(exc), parent=self)
             return False
