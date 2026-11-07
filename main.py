@@ -1,4 +1,3 @@
-import ctypes
 import os
 import sys
 import tkinter as tk
@@ -7,31 +6,34 @@ from queue import Empty, Full, Queue
 from threading import Event, Thread
 from time import monotonic
 
-from pynput import mouse
-
 from config.settings import Settings, validate_hotkeys
-from core.audio_worker import AudioError, SegmentQueue, record_wav
+from core.audio_queue import AudioError, SegmentQueue
 from core.context_manager import ContextManager
 from core.contracts import TaskError, TaskRequest, TaskStatus
-from core.hotkeys import VerifiedGlobalHotKeys
-from core.llm_worker import GenerationError, LLMWorker
-from core.orchestrator import TaskFailure, TaskOrchestrator
+from core.llm_worker import GenerationError
+from core.orchestrator import TaskFailure
+from core.platform_contracts import ScreenCaptureError
 from core.provider_contracts import ProviderError
 from core.session_manager import SessionManager
-from core.single_instance import SingleInstance
 from core.task_state import State, TaskState
+from platform_adapters.windows.composition import build_dependencies, configure_dpi
+from platform_adapters.windows.single_instance import SingleInstance
 from ui.snipping_tool import SnippingOverlay
 from ui.stealth_hud import StealthHUD
 
 
 class GhostAssistApp:
-    def __init__(self, settings):
+    def __init__(self, settings, dependencies=None):
         self.settings = settings
+        dependencies = dependencies or build_dependencies(settings)
         self.context = ContextManager(settings)
         self.hud = StealthHUD()
-        self.llm = LLMWorker(settings)
+        self.llm = dependencies.llm
+        self.screen_capture = dependencies.screen
+        self.audio_capture = dependencies.audio
+        self.hotkeys = dependencies.hotkeys
         self.tasks = TaskState()
-        self.screenshots = TaskOrchestrator()
+        self.screenshots = dependencies.screenshots
         self.screenshot_id = None
         self.screenshot_discard = False
         self.screenshot_session = None
@@ -101,7 +103,7 @@ class GhostAssistApp:
             if token.is_set():
                 return ""
             try:
-                image = self.llm.capture_screen()
+                image = self.screen_capture.capture()
                 if token.is_set():
                     return ""
                 return self.llm.generate(
@@ -115,6 +117,8 @@ class GhostAssistApp:
                 )
             except ProviderError as exc:
                 raise TaskFailure(TaskError(exc.code.value, str(exc))) from None
+            except ScreenCaptureError as exc:
+                raise TaskFailure(TaskError("screen_capture", str(exc))) from None
 
         self.screenshots.start(work, self.settings.task_timeout)
         self.future = self.screenshots.future
@@ -172,7 +176,7 @@ class GhostAssistApp:
             }
             self.hud.update_text("", "VAD · ЗАПИСЬ")
             self.capture_future = self.capture_worker.submit(
-                record_wav,
+                self.audio_capture.record,
                 stop,
                 stop,
                 self.settings.audio_max_seconds,
@@ -212,7 +216,7 @@ class GhostAssistApp:
             if audio_data is not None:
                 data = audio_data
             elif audio:
-                data = record_wav(
+                data = self.audio_capture.record(
                     task.stop,
                     task.cancel,
                     self.settings.audio_max_seconds,
@@ -221,7 +225,7 @@ class GhostAssistApp:
                     vad_options=None,
                 )
             else:
-                data = self.llm.capture_screen(bbox)
+                data = self.screen_capture.capture(bbox)
             if task.cancel.is_set():
                 return None
             task.stop.set()
@@ -439,7 +443,7 @@ class GhostAssistApp:
                             else f"[{self.context.mode}] ГОТОВО"
                         )
                         self.hud.update_text(result, status)
-                except (AudioError, ProviderError) as exc:
+                except (AudioError, ProviderError, ScreenCaptureError) as exc:
                     if not task.cancel.is_set():
                         self.hud.update_text(str(exc), "ОШИБКА")
                 except Exception:  # noqa: BLE001 - isolate the application boundary
@@ -612,8 +616,9 @@ class GhostAssistApp:
         }
 
         def click(x, y, button, pressed):
-            if pressed and button in (mouse.Button.x1, mouse.Button.x2):
-                self.enqueue(self.capture if button == mouse.Button.x1 else self.audio)
+            action = self.hotkeys.button_action(button)
+            if pressed and action:
+                self.enqueue(self.capture if action == "screen" else self.audio)
 
         def dispatch_hotkey(action):
             if not self.hotkeys_suspended.is_set():
@@ -621,13 +626,13 @@ class GhostAssistApp:
 
         try:
             self.listeners = [
-                VerifiedGlobalHotKeys(
+                self.hotkeys.create_keyboard(
                     {
                         key: lambda action=action: dispatch_hotkey(action)
                         for key, action in bindings.items()
                     }
                 ),
-                mouse.Listener(on_click=click),
+                self.hotkeys.create_mouse(on_click=click),
             ]
             self.listeners[0].start_verified()
             self.listeners[1].start()
@@ -673,11 +678,7 @@ def run_service():
         print("Укажите ключ Gemini в Dashboard или .env.", file=sys.stderr)
         return 2
     # Tk and MSS must see the same physical desktop coordinates.
-    set_dpi_context = getattr(
-        ctypes.windll.user32, "SetProcessDpiAwarenessContext", None
-    )
-    if set_dpi_context is None or not set_dpi_context(ctypes.c_void_p(-4)):
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    configure_dpi()
     GhostAssistApp(settings).run("--managed" in sys.argv)
     return 0
 

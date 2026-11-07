@@ -6,7 +6,10 @@ from unittest.mock import Mock, patch
 from pynput._util.win32 import SystemHook
 
 from config.settings import Settings
-from core.hotkeys import VerifiedGlobalHotKeys
+from platform_adapters.windows.hotkeys import (
+    VerifiedGlobalHotKeys,
+    WindowsHotkeyBackend,
+)
 from ui.dashboard import DashboardApp
 
 
@@ -23,7 +26,7 @@ class HookLifecycleTests(unittest.TestCase):
                 pass
 
         listener = VerifiedGlobalHotKeys({"<ctrl>+<shift>+<f9>": lambda: None})
-        with patch("core.hotkeys.SystemHook", RaisingHook):
+        with patch("platform_adapters.windows.hotkeys.SystemHook", RaisingHook):
             with self.assertRaises(OSError) as error:
                 listener.start_verified()
         self.assertNotIn("private detail", str(error.exception))
@@ -42,7 +45,7 @@ class HookLifecycleTests(unittest.TestCase):
                 pass
 
         listener = VerifiedGlobalHotKeys({"<ctrl>+<shift>+<f9>": lambda: None})
-        with patch("core.hotkeys.SystemHook", FailedHook):
+        with patch("platform_adapters.windows.hotkeys.SystemHook", FailedHook):
             with self.assertRaisesRegex(OSError, "hook"):
                 listener.start_verified()
         self.assertFalse(listener.is_alive())
@@ -62,12 +65,14 @@ class HookLifecycleTests(unittest.TestCase):
             initial = Settings(_env_file=None)
             candidate = Settings(_env_file=None, hotkey_dashboard="<alt>+<home>")
             old = Mock()
-            app = SimpleNamespace(settings=initial, dashboard_hotkey=old)
+            app = SimpleNamespace(
+                settings=initial, dashboard_hotkey=old, hotkeys=WindowsHotkeyBackend()
+            )
             app._create_dashboard_hotkey = lambda settings: (
                 DashboardApp._create_dashboard_hotkey(app, settings)
             )
             with (
-                patch("core.hotkeys.SystemHook", FailedHook),
+                patch("platform_adapters.windows.hotkeys.SystemHook", FailedHook),
                 patch("ui.dashboard.Settings", return_value=candidate),
                 patch("ui.dashboard.update_env") as update,
                 patch("ui.dashboard.messagebox.showerror"),

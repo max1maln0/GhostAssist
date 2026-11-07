@@ -1,7 +1,7 @@
 import unittest
 from uuid import uuid4
 
-from core.single_instance import SingleInstance
+from platform_adapters.windows.single_instance import SingleInstance
 
 
 class SingleInstanceTests(unittest.TestCase):

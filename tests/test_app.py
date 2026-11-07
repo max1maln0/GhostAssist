@@ -25,7 +25,9 @@ class AppTests(unittest.TestCase):
                 raise TimeoutError
             return b"wav"
 
-        with patch("main.record_wav", side_effect=record) as capture:
+        with patch.object(
+            self.app.audio_capture, "record", side_effect=record
+        ) as capture:
             with patch.object(
                 self.app.llm, "transcribe", return_value="question"
             ) as transcribe:
@@ -46,7 +48,7 @@ class AppTests(unittest.TestCase):
 
     def test_one_hundred_sequential_mock_requests_keep_state_bounded(self):
         with (
-            patch.object(self.app.llm, "capture_screen", return_value=b"jpg"),
+            patch.object(self.app.screen_capture, "capture", return_value=b"jpg"),
             patch.object(
                 self.app.llm,
                 "generate",
@@ -75,7 +77,7 @@ class AppTests(unittest.TestCase):
             publish("late")
             return "stale success"
 
-        with patch.object(self.app.llm, "capture_screen", return_value=b"jpg"):
+        with patch.object(self.app.screen_capture, "capture", return_value=b"jpg"):
             with patch.object(self.app.llm, "generate", side_effect=generate):
                 self.app.capture()
                 self.assertTrue(entered.wait(2))
@@ -111,7 +113,7 @@ class AppTests(unittest.TestCase):
                 raise TimeoutError
             return None
 
-        with patch.object(self.app.llm, "capture_screen", return_value=b"jpg"):
+        with patch.object(self.app.screen_capture, "capture", return_value=b"jpg"):
             with patch.object(self.app.llm, "generate", side_effect=generate):
                 self.app.capture()
                 self.assertTrue(entered.wait(2))
@@ -134,7 +136,9 @@ class AppTests(unittest.TestCase):
             publish("stale")
             return "stale"
 
-        with patch.object(self.app.llm, "capture_screen", return_value=b"jpg") as shot:
+        with patch.object(
+            self.app.screen_capture, "capture", return_value=b"jpg"
+        ) as shot:
             with patch.object(self.app.llm, "generate", side_effect=generate):
                 self.app.capture()
                 self.assertTrue(entered.wait(1))
@@ -164,7 +168,7 @@ class AppTests(unittest.TestCase):
             return "Вопрос: Поздний?\nОтвет: Поздний"
 
         with (
-            patch.object(self.app.llm, "capture_screen", return_value=b"jpg"),
+            patch.object(self.app.screen_capture, "capture", return_value=b"jpg"),
             patch.object(self.app.llm, "generate", side_effect=generate),
         ):
             self.app.capture()
@@ -184,7 +188,7 @@ class AppTests(unittest.TestCase):
 
     def test_screenshot_error_does_not_leak_exception_or_history(self):
         with patch.object(
-            self.app.llm, "capture_screen", side_effect=OSError("secret")
+            self.app.screen_capture, "capture", side_effect=OSError("secret")
         ):
             self.app.capture()
             self.app.future.result(2)
@@ -196,7 +200,7 @@ class AppTests(unittest.TestCase):
         )
 
     def test_completed_response_enters_history_and_is_reused(self):
-        with patch.object(self.app.llm, "capture_screen", return_value=b"jpg"):
+        with patch.object(self.app.screen_capture, "capture", return_value=b"jpg"):
             with patch.object(
                 self.app.llm,
                 "generate",
@@ -220,7 +224,7 @@ class AppTests(unittest.TestCase):
             cancel.wait(2)
             return "Вопрос: Поздний?\nОтвет: Поздний ответ"
 
-        with patch.object(self.app.llm, "capture_screen", return_value=b"jpg"):
+        with patch.object(self.app.screen_capture, "capture", return_value=b"jpg"):
             with patch.object(self.app.llm, "generate", side_effect=generate):
                 self.app.capture()
                 self.assertTrue(entered.wait(2))
@@ -232,7 +236,7 @@ class AppTests(unittest.TestCase):
 
     def test_pending_cancel_discards_completed_screenshot_before_ui_delivery(self):
         with (
-            patch.object(self.app.llm, "capture_screen", return_value=b"jpg"),
+            patch.object(self.app.screen_capture, "capture", return_value=b"jpg"),
             patch.object(
                 self.app.llm,
                 "generate",
@@ -258,7 +262,7 @@ class AppTests(unittest.TestCase):
             cancel.wait(2)
             return b""
 
-        with patch("main.record_wav", side_effect=record):
+        with patch.object(self.app.audio_capture, "record", side_effect=record):
             with patch.object(self.app.llm, "transcribe") as transcribe:
                 self.app.audio()
                 self.assertTrue(entered.wait(2))
@@ -277,7 +281,7 @@ class AppTests(unittest.TestCase):
             stop.wait(2)
             return b""
 
-        with patch("main.record_wav", side_effect=record):
+        with patch.object(self.app.audio_capture, "record", side_effect=record):
             for _ in range(30):
                 self.app.audio()
                 future = self.app.capture_future
@@ -302,7 +306,7 @@ class AppTests(unittest.TestCase):
             stop.wait(2)
             return b""
 
-        with patch("main.record_wav", side_effect=record):
+        with patch.object(self.app.audio_capture, "record", side_effect=record):
             with patch.object(
                 self.app.llm, "transcribe", return_value="речь"
             ) as transcribe:
@@ -331,7 +335,7 @@ class AppTests(unittest.TestCase):
             stop.wait(2)
             return b""
 
-        with patch("main.record_wav", side_effect=record):
+        with patch.object(self.app.audio_capture, "record", side_effect=record):
             with patch.object(self.app.llm, "transcribe", return_value="Повтор"):
                 with patch.object(self.app, "show_transcript") as review:
                     self.app.audio()

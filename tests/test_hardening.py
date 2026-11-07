@@ -81,13 +81,14 @@ class DashboardRecoveryTests(unittest.TestCase):
             device_refreshing=False,
             refresh_devices_button=Mock(),
             device_updates=Queue(maxsize=1),
+            audio_capture=Mock(),
         )
 
         def fail():
             completed.set()
             raise RuntimeError("sensitive details")
 
-        with patch("ui.dashboard.list_loopback_devices", side_effect=fail):
+        with patch.object(app.audio_capture, "list_devices", side_effect=fail):
             DashboardApp._refresh_devices(app)
             self.assertTrue(completed.wait(2))
             devices, error = app.device_updates.get(timeout=2)

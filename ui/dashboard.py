@@ -23,10 +23,10 @@ from config.settings import (
     profile_path,
     validate_hotkeys,
 )
-from core.audio_worker import list_loopback_devices
-from core.hotkeys import VerifiedGlobalHotKeys
 from core.profile_store import write_profile
-from core.single_instance import SingleInstance
+from platform_adapters.windows.audio import WindowsAudioCapture
+from platform_adapters.windows.hotkeys import WindowsHotkeyBackend
+from platform_adapters.windows.single_instance import SingleInstance
 from ui.hotkey_capture import HotkeyCapture, Tooltip
 from ui.tray import Tray
 
@@ -44,6 +44,8 @@ class DashboardApp(ctk.CTk):
     def __init__(self, instance=None):
         super().__init__()
         self.instance = instance
+        self.audio_capture = WindowsAudioCapture()
+        self.hotkeys = WindowsHotkeyBackend()
         self.tray_commands = Queue(maxsize=64)
         self.exit_requested = Event()
         self.capturing_hotkey = False
@@ -452,7 +454,7 @@ class DashboardApp(ctk.CTk):
 
     def _create_dashboard_hotkey(self, settings):
         validate_hotkeys(settings)
-        listener = VerifiedGlobalHotKeys(
+        listener = self.hotkeys.create_keyboard(
             {settings.hotkey_dashboard: lambda: self._enqueue_tray("toggle")}
         )
         listener.start_verified()
@@ -705,7 +707,7 @@ class DashboardApp(ctk.CTk):
 
         def scan():
             try:
-                result = (list_loopback_devices(), None)
+                result = (self.audio_capture.list_devices(), None)
             except Exception:  # noqa: BLE001 - report unexpected worker failures safely
                 result = ([], "Не удалось получить список устройств WASAPI.")
             try:

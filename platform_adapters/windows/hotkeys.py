@@ -8,7 +8,7 @@ step with pynput's message-loop implementation when upgrading the dependency.
 from ctypes import wintypes
 from threading import Event
 
-from pynput import keyboard
+from pynput import keyboard, mouse
 from pynput._util.win32 import MessageLoop, SystemHook
 
 # Pynput 1.8.2 leaves these at ctypes' default c_int; HHOOK and LRESULT
@@ -16,6 +16,22 @@ from pynput._util.win32 import MessageLoop, SystemHook
 SystemHook._SetWindowsHookEx.restype = wintypes.HHOOK
 SystemHook._UnhookWindowsHookEx.restype = wintypes.BOOL
 SystemHook._CallNextHookEx.restype = wintypes.LPARAM
+
+
+class WindowsHotkeyBackend:
+    def create_keyboard(self, bindings):
+        return VerifiedGlobalHotKeys(bindings)
+
+    def create_mouse(self, on_click):
+        return mouse.Listener(on_click=on_click)
+
+    @staticmethod
+    def button_action(button):
+        if button == mouse.Button.x1:
+            return "screen"
+        if button == mouse.Button.x2:
+            return "audio"
+        return None
 
 
 class VerifiedGlobalHotKeys(keyboard.GlobalHotKeys):

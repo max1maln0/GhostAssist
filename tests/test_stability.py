@@ -18,10 +18,11 @@ from pydantic import ValidationError
 
 from config.env_file import update_env
 from config.settings import Settings, profile_path, validate_hotkeys
-from core.audio_worker import AudioError, SegmentQueue, record_wav
+from core.audio_queue import AudioError, SegmentQueue
 from core.llm_worker import GenerationError, LLMWorker
 from core.session_manager import Interaction
 from core.task_state import State, TaskState
+from platform_adapters.windows.audio import record_wav
 
 
 class TaskTests(unittest.TestCase):

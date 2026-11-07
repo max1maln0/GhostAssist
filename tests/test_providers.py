@@ -24,7 +24,7 @@ class ProviderTests(unittest.TestCase):
             app = GhostAssistApp(Settings(_env_file=None))
         app.llm.provider = MockProvider(chunks=("Вопрос: Пример?\n", "Ответ: Ответ"))
         try:
-            with patch.object(app.llm, "capture_screen", return_value=b"jpeg"):
+            with patch.object(app.screen_capture, "capture", return_value=b"jpeg"):
                 app.capture()
                 app.future.result(2)
                 app.poll()
