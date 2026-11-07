@@ -6,7 +6,7 @@ from dotenv.parser import parse_stream
 
 from config.storage import configuration_lock
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class ConfigurationError(ValueError):
@@ -28,9 +28,9 @@ def read_version(path: Path) -> int:
         raise ConfigurationError("Файл .env должен иметь кодировку UTF-8.") from None
     if not versions:
         return 0
-    if len(versions) != 1 or versions[0] != str(SCHEMA_VERSION):
+    if len(versions) != 1 or versions[0] not in ("1", "2"):
         raise ConfigurationError("Неизвестная или неоднозначная версия схемы .env.")
-    return SCHEMA_VERSION
+    return int(versions[0])
 
 
 def migrate_env(path: Path) -> bool:

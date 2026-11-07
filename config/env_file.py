@@ -24,12 +24,12 @@ def update_env(values: dict[str, str], path: Path = ENV_FILE):
 
 
 def _update_env(values: dict[str, str], path: Path):
-    from config.migration import read_version
+    from config.migration import SCHEMA_VERSION, read_version
 
     read_version(path)
-    if "SCHEMA_VERSION" in values and values["SCHEMA_VERSION"] != "1":
+    if "SCHEMA_VERSION" in values and values["SCHEMA_VERSION"] != str(SCHEMA_VERSION):
         raise ValueError("Неподдерживаемая версия схемы.")
-    values = {"SCHEMA_VERSION": "1", **values}
+    values = {"SCHEMA_VERSION": str(SCHEMA_VERSION), **values}
     with tempfile.NamedTemporaryFile(
         dir=path.parent,
         mode="w",

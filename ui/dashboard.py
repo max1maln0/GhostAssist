@@ -857,7 +857,9 @@ class DashboardApp(ctk.CTk):
             return
         if not self.settings.has_api_key:
             messagebox.showwarning(
-                "Gemini", "Укажите ключ Gemini API в Dashboard или .env."
+                "AI",
+                "Укажите ключи выбранных провайдеров в .env: "
+                + ", ".join(self.settings.missing_credentials),
             )
             return
         try:

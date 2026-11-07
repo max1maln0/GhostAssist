@@ -18,6 +18,8 @@ from platform_adapters.windows.hotkeys import WindowsHotkeyBackend
 from platform_adapters.windows.screen import WindowsScreenCapture
 from providers.gemini import GeminiProvider
 from providers.gemini_catalog import GEMINI_MODEL_CAPABILITIES
+from providers.openai_catalog import OPENAI_MODEL_CAPABILITIES
+from providers.openai_provider import OpenAIProvider
 
 
 @dataclass
@@ -46,12 +48,21 @@ def build_dependencies(settings, *, registry=None, generation=None, transcriptio
                 GEMINI_MODEL_CAPABILITIES,
             )
         )
-    # Stage 4.1 keeps schema 1: both defaults resolve legacy Gemini settings.
-    # Trusted composition may bind different registered providers/models without
-    # changing ApplicationController. Persisted independent selectors come later.
-    legacy = ProviderBinding(settings.ai_provider, settings.gemini_model)
-    provider = BoundGeneration(registry, generation or legacy)
-    transcriber = BoundTranscription(registry, transcription or legacy)
+        registry.register(
+            ProviderRegistration(
+                "openai",
+                lambda model: OpenAIProvider(settings, model),
+                OpenAIProvider.capabilities,
+                OPENAI_MODEL_CAPABILITIES,
+            )
+        )
+    provider = BoundGeneration(
+        registry, generation or ProviderBinding(*settings.resolve_binding("generation"))
+    )
+    transcriber = BoundTranscription(
+        registry,
+        transcription or ProviderBinding(*settings.resolve_binding("transcription")),
+    )
     screen = WindowsScreenCapture(settings.crop_width, settings.crop_height)
     return Dependencies(
         orchestrator=TaskOrchestrator(),

@@ -47,7 +47,7 @@ for n in range(8):
             self.assertEqual(process.returncode, 0, error.decode(errors="replace"))
         values = dotenv_values(self.path)
         self.assertEqual(values["GEMINI_API_KEY"], "private-test-key")
-        self.assertEqual(values["SCHEMA_VERSION"], "1")
+        self.assertEqual(values["SCHEMA_VERSION"], "2")
         self.assertEqual(len([key for key in values if key.startswith("WRITER_")]), 48)
         self.assertEqual(
             self.path.read_text(encoding="utf-8").count("SCHEMA_VERSION"), 1

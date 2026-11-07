@@ -46,11 +46,16 @@ class MemoryConfig(Group):
 
 
 class ProviderConfig(Group):
-    identifier: Literal["gemini"] = "gemini"
+    identifier: Literal["gemini", "openai"] = "gemini"
     model: str
     api_key: SecretStr = Field(repr=False)
     request_timeout: float
-    # Connection uses the Gemini SDK defaults; no configurable endpoint yet.
+    # Provider-specific fixed endpoint; custom endpoints are not configurable.
+
+
+class BindingConfig(Group):
+    identifier: Literal["gemini", "openai"]
+    model: str
 
 
 class ConfigurationGroups(Group):
@@ -61,3 +66,6 @@ class ConfigurationGroups(Group):
     interface: InterfaceConfig
     memory: MemoryConfig
     provider: ProviderConfig
+    openai: ProviderConfig
+    generation: BindingConfig
+    transcription: BindingConfig

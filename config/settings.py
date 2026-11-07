@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env"
 PROFILES = ROOT / "config" / "profiles"
 GEMINI_MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash")
+OPENAI_GENERATION_MODEL = "gpt-5.6-terra"
+OPENAI_TRANSCRIPTION_MODEL = "gpt-transcribe"
 
 
 def profile_path(name: str, directory: Path = PROFILES) -> Path:
@@ -35,10 +37,15 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     ai_provider: Literal["gemini"] = "gemini"
     gemini_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
     gemini_model: str = Field(GEMINI_MODELS[0], min_length=1)
+    openai_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    generation_provider: Literal["gemini", "openai"] | None = None
+    generation_model: str | None = Field(None, min_length=1)
+    transcription_provider: Literal["gemini", "openai"] | None = None
+    transcription_model: str | None = Field(None, min_length=1)
     active_profile: str = "example_legend.md"
     crop_width: int = Field(1280, ge=160, le=7680)
     crop_height: int = Field(720, ge=120, le=4320)
@@ -70,7 +77,7 @@ class Settings(BaseSettings):
     @field_validator("schema_version", mode="before")
     @classmethod
     def parse_schema_version(cls, value):
-        return 1 if value == "1" else value
+        return 2 if value in (1, "1", 2, "2") else value
 
     @field_validator("active_profile")
     @classmethod
@@ -87,8 +94,40 @@ class Settings(BaseSettings):
 
     @property
     def has_api_key(self):
-        key = self.gemini_api_key.get_secret_value().strip()
-        return bool(key and key.isascii() and key != "AIzaSyYourActualApiKeyHere")
+        return not self.missing_credentials
+
+    def resolve_binding(self, purpose):
+        if purpose not in ("generation", "transcription"):
+            raise ValueError("Unknown task purpose")
+        provider = getattr(self, purpose + "_provider") or self.ai_provider
+        model = getattr(self, purpose + "_model")
+        if model is None:
+            model = (
+                self.gemini_model
+                if provider == "gemini"
+                else (
+                    OPENAI_GENERATION_MODEL
+                    if purpose == "generation"
+                    else OPENAI_TRANSCRIPTION_MODEL
+                )
+            )
+        return provider, model
+
+    @property
+    def missing_credentials(self):
+        missing = []
+        for provider in dict.fromkeys(
+            self.resolve_binding(p)[0] for p in ("generation", "transcription")
+        ):
+            key = getattr(self, provider + "_api_key").get_secret_value().strip()
+            if (
+                not key
+                or not key.isascii()
+                or any(c.isspace() for c in key)
+                or key == "AIzaSyYourActualApiKeyHere"
+            ):
+                missing.append(provider.upper() + "_API_KEY")
+        return tuple(missing)
 
     @property
     def groups(self):
@@ -124,6 +163,26 @@ class Settings(BaseSettings):
                 "api_key": self.gemini_api_key,
                 "request_timeout": self.request_timeout,
             },
+            openai={
+                "identifier": "openai",
+                "model": OPENAI_GENERATION_MODEL,
+                "api_key": self.openai_api_key,
+                "request_timeout": self.request_timeout,
+            },
+            generation=dict(
+                zip(
+                    ("identifier", "model"),
+                    self.resolve_binding("generation"),
+                    strict=True,
+                )
+            ),
+            transcription=dict(
+                zip(
+                    ("identifier", "model"),
+                    self.resolve_binding("transcription"),
+                    strict=True,
+                )
+            ),
         )
 
 

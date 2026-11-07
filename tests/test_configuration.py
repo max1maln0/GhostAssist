@@ -33,7 +33,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(settings.groups.audio.device, "Headset")
         migrated = self.path.read_bytes()
         self.assertIn(original_bytes, migrated)
-        self.assertIn(b"SCHEMA_VERSION='1'", migrated)
+        self.assertIn(b"SCHEMA_VERSION='2'", migrated)
         self.assertFalse(migrate_env(self.path))
         self.assertEqual(self.path.read_bytes(), migrated)
         self.assertEqual(profile.read_text(encoding="utf-8"), "private profile")
@@ -41,7 +41,7 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_missing_file_and_defaults(self):
         settings = load_settings(self.path)
-        self.assertEqual(settings.schema_version, 1)
+        self.assertEqual(settings.schema_version, 2)
         self.assertFalse(self.path.exists())
         self.assertEqual(settings.groups.memory.depth, 6)
 
@@ -108,7 +108,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(load_settings(self.path).task_timeout, 20)
         self.assertIn("TASK_TIMEOUT=${BASE}", self.path.read_text(encoding="utf-8"))
         before = self.path.read_bytes()
-        with patch.dict(os.environ, {"SCHEMA_VERSION": "2"}):
+        with patch.dict(os.environ, {"SCHEMA_VERSION": "9"}):
             with self.assertRaises(ValidationError):
                 load_settings(self.path)
         self.assertEqual(self.path.read_bytes(), before)

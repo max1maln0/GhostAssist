@@ -151,7 +151,7 @@ class RegistryIntegrationTests(unittest.TestCase):
         with patch("providers.gemini_client.genai.Client") as sdk:
             deps = build_dependencies(self.settings)
             try:
-                self.assertEqual(deps.registry.identifiers(), ("gemini",))
+                self.assertEqual(deps.registry.identifiers(), ("gemini", "openai"))
                 self.assertEqual(deps.provider.binding, deps.transcription.binding)
                 deps.registry.describe("gemini")
                 sdk.assert_not_called()

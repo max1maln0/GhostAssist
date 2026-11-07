@@ -278,7 +278,11 @@ def run_service():
     settings = load_settings()
     validate_hotkeys(settings)
     if not settings.has_api_key:
-        print("Укажите ключ Gemini в Dashboard или .env.", file=sys.stderr)
+        print(
+            "Укажите в .env ключи выбранных провайдеров: "
+            + ", ".join(settings.missing_credentials),
+            file=sys.stderr,
+        )
         return 2
     # Tk and MSS must see the same physical desktop coordinates.
     configure_dpi()
