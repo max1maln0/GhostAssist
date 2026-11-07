@@ -102,7 +102,8 @@ class ProviderTests(unittest.TestCase):
         from google.genai import errors
         from test_stability import FakeGemini
 
-        worker = LLMWorker(Settings(_env_file=None, gemini_api_key="test"))
+        settings = Settings(_env_file=None, gemini_api_key="test")
+        worker = LLMWorker(settings, provider=GeminiProvider(settings))
         fake = FakeGemini([[errors.ClientError(401, {"message": "secret"})]])
         with patch("providers.gemini_client.genai.Client", return_value=fake):
             with self.assertRaises(ProviderError) as error:

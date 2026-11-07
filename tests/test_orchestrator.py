@@ -125,6 +125,30 @@ class OrchestratorTests(unittest.TestCase):
         self.orchestrator._future.result(1)
         self.assertTrue(self.orchestrator.close(timeout=0.1))
 
+    def test_previous_phase_timer_cannot_expire_resumed_operation(self):
+        from core.orchestrator import AwaitInput
+
+        request = TaskRequest("audio", "audio/wav")
+        self.orchestrator.prepare(request)
+        self.orchestrator.start(lambda *_: AwaitInput("question"), 2)
+        self.orchestrator.future.result(1)
+        old_phase = self.orchestrator._phase
+        self.orchestrator.drain()
+        entered, release = threading.Event(), threading.Event()
+
+        def generate(*_):
+            entered.set()
+            release.wait(1)
+            return "answer"
+
+        self.orchestrator.start(generate, 2)
+        self.assertTrue(entered.wait(1))
+        self.orchestrator._expire(request.task_id, old_phase)
+        self.assertEqual(self.orchestrator.state, Lifecycle.RUNNING)
+        release.set()
+        self.orchestrator.future.result(1)
+        self.assertEqual(self.orchestrator.drain()[-1].status, TaskStatus.COMPLETED)
+
     def test_repeated_cancel_keeps_one_executor_thread_and_discards_late_output(self):
         worker_ids = set()
         for _ in range(30):

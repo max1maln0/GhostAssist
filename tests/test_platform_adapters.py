@@ -19,7 +19,17 @@ from platform_adapters.windows.screen import WindowsScreenCapture
 
 class PlatformTests(unittest.TestCase):
     def test_core_has_no_windows_or_capture_imports(self):
-        forbidden = {"ctypes", "pynput", "pyaudiowpatch", "mss", "platform_adapters"}
+        forbidden = {
+            "ctypes",
+            "pynput",
+            "pyaudiowpatch",
+            "mss",
+            "platform_adapters",
+            "providers",
+            "google",
+            "tkinter",
+            "customtkinter",
+        }
         for path in Path("core").glob("*.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):

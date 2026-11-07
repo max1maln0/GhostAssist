@@ -19,9 +19,15 @@ from pydantic import ValidationError
 from config.env_file import update_env
 from config.settings import Settings, profile_path, validate_hotkeys
 from core.audio_queue import AudioError, SegmentQueue
-from core.llm_worker import GenerationError, LLMWorker
+from core.llm_worker import LLMWorker as ProviderWorker
 from core.session_manager import Interaction
 from platform_adapters.windows.audio import record_wav
+from providers.gemini import GeminiProvider
+from providers.gemini_client import GenerationError
+
+
+def gemini_worker(settings):
+    return ProviderWorker(settings, provider=GeminiProvider(settings))
 
 
 class FakeAudio:
@@ -258,7 +264,7 @@ class GeminiTests(unittest.TestCase):
             request_timeout=kwargs.get("request", 1),
             task_timeout=kwargs.get("total", 2),
         )
-        worker = LLMWorker(settings)
+        worker = gemini_worker(settings)
         with patch("providers.gemini_client.genai.Client", return_value=fake):
             return worker.generate(
                 b"media", "audio/wav", "prompt", publish, cancel or threading.Event()
@@ -287,7 +293,7 @@ class GeminiTests(unittest.TestCase):
             return original(**kwargs)
 
         settings = Settings(_env_file=None, gemini_api_key="test-key")
-        worker = LLMWorker(settings)
+        worker = gemini_worker(settings)
         with patch("providers.gemini_client.genai.Client", side_effect=client):
             self.assertEqual(
                 worker.generate(
@@ -302,7 +308,7 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(inline["data"], "d2F2")
 
     def test_history_is_sent_as_user_and_model_messages(self):
-        worker = LLMWorker(Settings(_env_file=None, gemini_api_key="test"))
+        worker = gemini_worker(Settings(_env_file=None, gemini_api_key="test"))
         fake = FakeGemini([[chunk("готово", "STOP")]])
         with patch("providers.gemini_client.genai.Client", return_value=fake):
             worker.generate(
@@ -319,7 +325,7 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(messages[1].parts[0].text, "прошлый ответ")
 
     def test_transcription_validates_wav_and_uses_stream(self):
-        worker = LLMWorker(Settings(_env_file=None, gemini_api_key="test"))
+        worker = gemini_worker(Settings(_env_file=None, gemini_api_key="test"))
         cancel = threading.Event()
         for invalid in (b"", b"not wav"):
             with self.assertRaises(GenerationError):
@@ -343,7 +349,7 @@ class GeminiTests(unittest.TestCase):
             audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
             audio.writeframes(bytes(640))
         data = buffer.getvalue()
-        worker = LLMWorker(
+        worker = gemini_worker(
             Settings(
                 _env_file=None,
                 gemini_api_key="test",

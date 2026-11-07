@@ -60,6 +60,7 @@ class TaskOrchestrator:
         self._future = None
         self._timer = None
         self._closed = False
+        self._phase = 0
 
     @property
     def state(self):
@@ -109,7 +110,10 @@ class TaskOrchestrator:
             request, token = self._request, self._token
             self._state = Lifecycle.RUNNING
             self._events.append(TaskEvent(request.task_id, TaskStatus.STARTED))
-            self._timer = Timer(timeout, self._expire, args=(request.task_id,))
+            self._phase += 1
+            self._timer = Timer(
+                timeout, self._expire, args=(request.task_id, self._phase)
+            )
             self._timer.daemon = True
             self._future = self._executor.submit(self._run, request, token, handler)
             self._timer.start()
@@ -167,9 +171,13 @@ class TaskOrchestrator:
             self._events.append(TaskEvent(task_id, status, text=text, error=error))
             return True
 
-    def _expire(self, task_id):
+    def _expire(self, task_id, phase):
         with self._lock:
-            if self._state is Lifecycle.RUNNING and self._request.task_id == task_id:
+            if (
+                self._state is Lifecycle.RUNNING
+                and self._request.task_id == task_id
+                and self._phase == phase
+            ):
                 self._token.cancel()
                 self._state = Lifecycle.FAILED
                 self._events.clear()

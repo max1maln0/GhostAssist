@@ -4,14 +4,12 @@ from core.provider_contracts import (
     ProviderErrorCode,
     TranscriptionRequest,
 )
-from providers.gemini import GeminiProvider
-from providers.gemini_client import GenerationError as GenerationError
 
 
 class LLMWorker:
-    def __init__(self, settings, provider=None):
+    def __init__(self, settings, provider):
         self.settings = settings
-        self.provider = provider or GeminiProvider(settings)
+        self.provider = provider
 
     def generate(
         self,
