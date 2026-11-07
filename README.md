@@ -120,7 +120,7 @@ Dashboard показывает количество завершённых вз�
 
 | Компонент | Роль |
 | --- | --- |
-| `main.py`, `core/task_state.py` | Хоткеи, очередь команд Tk, состояния задач и завершение |
+| `main.py`, `core/controller.py`, `core/orchestrator.py` | UI-адаптер, независимый контроллер и общий жизненный цикл задач |
 | `core/platform_contracts.py`, `core/audio_queue.py` | Контракты платформы и ограниченная очередь аудиосегментов |
 | `platform_adapters/windows/` | Захват MSS и WASAPI, глобальные обработчики, DPI и Windows mutex |
 | `core/llm_worker.py`, `core/provider_contracts.py` | Совместимый фасад и независимые контракты AI |
