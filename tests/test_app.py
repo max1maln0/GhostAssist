@@ -100,6 +100,63 @@ class AppTests(unittest.TestCase):
         self.app.orchestrator.close(timeout=2)
         self.app._source.shutdown(wait=True)
 
+    def test_ui_window_failures_do_not_leave_controller_busy(self):
+        from main import GhostAssistApp
+
+        self.cleanup_for_replacement()
+        deps = SimpleNamespace(**vars(self.deps))
+        deps.orchestrator = TaskOrchestrator()
+        deps.hotkeys = Mock()
+        with patch("main.StealthHUD"):
+            ui = GhostAssistApp(self.settings, dependencies=deps)
+        self.app = ui.controller
+        with patch("main.SnippingOverlay", side_effect=OSError("private")):
+            ui.snip()
+            ui.poll()
+            ui.hud.update_text.assert_called_with(
+                "Не удалось открыть окно выделения.", "ОШИБКА"
+            )
+            ui.poll()
+            self.assertFalse(self.app.busy)
+
+        with patch("main.TranscriptReview", side_effect=OSError("private")):
+            ui.audio()
+            ui.future.result(2)
+            ui.poll()
+            ui.hud.update_text.assert_called_with(
+                "Не удалось открыть проверку текста.", "ОШИБКА"
+            )
+            ui.poll()
+            self.assertFalse(self.app.busy)
+
+    def test_auto_send_adapter_and_stale_confirmation(self):
+        from main import GhostAssistApp
+
+        self.cleanup_for_replacement()
+        self.settings.auto_send_transcript = True
+        deps = SimpleNamespace(**vars(self.deps))
+        deps.orchestrator = TaskOrchestrator()
+        deps.hotkeys = Mock()
+        with patch("main.StealthHUD"):
+            ui = GhostAssistApp(self.settings, dependencies=deps)
+        self.app = ui.controller
+        with patch("main.TranscriptReview") as review:
+            ui.audio()
+            ui.future.result(2)
+            old_id = self.app.active.request.task_id
+            ui.poll()
+            review.return_value.submit.side_effect = lambda: review.call_args.args[2](
+                "auto"
+            )
+            review.return_value.after.call_args.args[1]()
+            ui.future.result(2)
+            ui.poll()
+            self.assertEqual(ui.sessions.snapshot("INTERVIEW")[1][0].question, "auto")
+            ui.capture()
+            self.assertFalse(self.app.confirm(old_id, "stale"))
+            ui.future.result(2)
+            ui.poll()
+
     def setUp(self):
         self.settings = Settings(_env_file=None)
         self.deps = SimpleNamespace(

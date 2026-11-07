@@ -91,9 +91,11 @@ class GhostAssistApp:
 
         try:
             self.overlay = SnippingOverlay(self.hud.root, selected)
+            return True
         except Exception:  # noqa: BLE001 - UI boundary
             self.controller.cancel_current()
             self.hud.update_text("Не удалось открыть окно выделения.", "ОШИБКА")
+            return False
 
     def _review(self, task_id, text):
         def submit(question):
@@ -147,9 +149,18 @@ class GhostAssistApp:
             if event.kind is ViewKind.DISPLAY:
                 self.hud.update_text(event.text, event.status)
             elif event.kind is ViewKind.SELECT and not self.closing:
-                self._select(event.task_id)
+                if not self._select(event.task_id):
+                    break
             elif event.kind is ViewKind.REVIEW and not self.closing:
-                self._review(event.task_id, event.text)
+                try:
+                    self._review(event.task_id, event.text)
+                except Exception:  # noqa: BLE001 - isolate a failing UI adapter
+                    self.controller.cancel_current()
+                    self._dismiss()
+                    self.hud.update_text(
+                        "Не удалось открыть проверку текста.", "ОШИБКА"
+                    )
+                    break
             elif event.kind is ViewKind.DISMISS:
                 self._dismiss()
         if self.managed:
