@@ -21,16 +21,17 @@ class GenerationError(ProviderError):
 class GeminiClient:
     def __init__(self, settings):
         self.settings = settings
-        self.models = tuple(dict.fromkeys((settings.gemini_model, *GEMINI_MODELS)))
+        self.configuration = settings.groups.provider
+        self.models = tuple(dict.fromkeys((self.configuration.model, *GEMINI_MODELS)))
 
     async def _generate(self, data, mime_type, prompt, publish, history, instruction):
         options = types.HttpOptions(
-            timeout=int(self.settings.request_timeout * 1000),
+            timeout=int(self.configuration.request_timeout * 1000),
             retry_options=types.HttpRetryOptions(attempts=1),
         )
         client = genai.Client(
             vertexai=False,
-            api_key=self.settings.gemini_api_key.get_secret_value().strip(),
+            api_key=self.configuration.api_key.get_secret_value().strip(),
             http_options=options,
         )
         try:
@@ -54,7 +55,7 @@ class GeminiClient:
                                 history,
                                 instruction,
                             ),
-                            self.settings.request_timeout,
+                            self.configuration.request_timeout,
                         )
                     except errors.APIError as exc:
                         code = exc.code
