@@ -1,6 +1,5 @@
 import os
 import sys
-import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
 from queue import Empty, Full, Queue
 from threading import Event, Thread
@@ -20,6 +19,7 @@ from platform_adapters.windows.composition import build_dependencies, configure_
 from platform_adapters.windows.single_instance import SingleInstance
 from ui.snipping_tool import SnippingOverlay
 from ui.stealth_hud import StealthHUD
+from ui.transcript_review import TranscriptReview
 
 
 class GhostAssistApp:
@@ -267,31 +267,13 @@ class GhostAssistApp:
             "VAD · ПРОВЕРЬТЕ ТЕКСТ" if self.monitoring else "ПРОВЕРЬТЕ ТРАНСКРИПЦИЮ"
         )
         self.hud.update_text(text, status)
-        self.review = tk.Toplevel(self.hud.root)
-        self.review.title("Проверка распознанной речи")
-        self.review.attributes("-topmost", True)
-        self.review.configure(bg="#080e1a")
-        editor = tk.Text(
-            self.review,
-            width=65,
-            height=8,
-            wrap="word",
-            bg="#080e1a",
-            fg="#cbd5e1",
-            insertbackground="white",
-        )
-        editor.pack(fill="both", expand=True, padx=12, pady=12)
-        editor.insert("1.0", text)
 
-        def submit():
+        def submit(question):
             if (
                 self.review is None
                 or self.tasks.active is not task
                 or task.cancel.is_set()
             ):
-                return
-            question = editor.get("1.0", "end-1c").strip()
-            if not question:
                 return
             self.review.destroy()
             self.review = None
@@ -318,15 +300,9 @@ class GhostAssistApp:
 
             self.future = self.worker.submit(work)
 
-        controls = tk.Frame(self.review, bg="#080e1a")
-        controls.pack(pady=(0, 12))
-        tk.Button(controls, text="Отправить", command=submit).pack(side="left", padx=5)
-        tk.Button(controls, text="Отменить", command=self.cancel_review).pack(
-            side="left", padx=5
-        )
-        self.review.protocol("WM_DELETE_WINDOW", self.cancel_review)
+        self.review = TranscriptReview(self.hud.root, text, submit, self.cancel_review)
         if self.settings.auto_send_transcript:
-            self.review.after(0, submit)
+            self.review.after(0, self.review.submit)
 
     def cancel_review(self):
         task = self.tasks.active

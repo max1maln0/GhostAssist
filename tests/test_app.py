@@ -331,6 +331,26 @@ class AppTests(unittest.TestCase):
         self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
         self.assertNotIn("Поздний", str(self.app.hud.update_text.call_args_list))
 
+    def test_review_adapter_submits_edited_question_and_stores_success(self):
+        task = self.app.tasks.begin(State.REVIEW)
+        generation, _ = self.app.sessions.snapshot("INTERVIEW")
+        self.app.session_task = (task, "INTERVIEW", generation)
+        with (
+            patch("main.TranscriptReview") as review,
+            patch.object(
+                self.app.llm, "generate", return_value="Готовый ответ"
+            ) as generate,
+        ):
+            self.app.show_transcript(task, "исходный текст")
+            review.call_args.args[2]("исправленный вопрос")
+            self.app.future.result(timeout=2)
+            self.app.poll()
+        review.return_value.destroy.assert_called_once()
+        self.assertEqual(generate.call_args.args[0], "исправленный вопрос".encode())
+        history = self.app.sessions.snapshot("INTERVIEW")[1]
+        self.assertEqual(history[0].question, "исправленный вопрос")
+        self.assertEqual(history[0].answer, "Готовый ответ")
+
     def test_vad_segment_reaches_transcription_review(self):
         self.app.settings.vad_enabled = True
         emitted = threading.Event()
