@@ -1,15 +1,13 @@
-# Stage 4.1 — фактическая архитектура Provider Registry
+# Stage 4.1–4.2 — фактическая архитектура Provider Registry
 
-Реализован реестр и независимая маршрутизация. Рабочий адаптер — только Gemini.
-OpenAI, Claude, Ollama, custom endpoints и новые селекторы Dashboard не реализованы.
-Формат `.env` и `SCHEMA_VERSION=1` сохранены.
+Реализован реестр и независимая маршрутизация Gemini/OpenAI. Claude, Ollama, custom endpoints и полный графический селектор провайдеров не реализованы. Текущий формат .env — SCHEMA_VERSION=2, с миграцией схемы 1. [Настройка OpenAI](OPENAI_PROVIDER.md).
 
 ## Сборка и поток вызовов
 
 `platform_adapters/windows/composition.py:build_dependencies` создаёт реестр,
-регистрирует доверенную фабрику Gemini и собирает две отдельные привязки
+регистрирует доверенные фабрики Gemini и OpenAI и собирает две отдельные привязки
 `ProviderBinding(provider_id, model_id)`. Legacy-настройки `AI_PROVIDER` и
-`GEMINI_MODEL` по умолчанию используются для обеих задач. Сама сборка, перечисление
+`GEMINI_MODEL` используются при отсутствии новых GENERATION_PROVIDER/MODEL и TRANSCRIPTION_PROVIDER/MODEL. Сама сборка, перечисление
 идентификаторов и чтение каталога не создают SDK-клиент и не выполняют запросы.
 
 GenerationRequest → BoundGeneration → проверка adapter/model capabilities →
@@ -38,9 +36,7 @@ dependencies = build_dependencies(
 )
 ```
 
-Для разных провайдеров передаётся реестр с их доверенными фабриками через
-`registry=...` и соответствующие привязки. Это работает в интеграционных тестах
-с двумя отдельными MockProvider. Пользовательские строки конфигурации не становятся
+Разные рабочие провайдеры теперь выбираются и в .env: OpenAI → Gemini и Gemini → OpenAI проверены через SDK с mock HTTP. Для программной подмены по-прежнему доступны registry=... и отдельные ProviderBinding. Пользовательские строки конфигурации не становятся
 Python import paths, именами классов для eval или фабриками.
 
 ## Реестр и владение ресурсами
@@ -117,34 +113,39 @@ WAV дополнительно проверяется существующим G
 Сохранена прежняя очередь fallback внутри Gemini, backoff и очистка partial text.
 Каждый кандидат отдельно проверяется на формат, размер и необходимые возможности;
 неизвестные/несовместимые резервные модели пропускаются до SDK. Начальная выбранная
-модель должна пройти проверку. Межпровайдерного fallback нет: другой провайдер не
+модель должна пройти проверку. OpenAI имеет bounded retry той же модели, без автоматического перехода на Gemini. Межпровайдерного fallback нет: другой провайдер не
 получает содержимое автоматически. Авторизация принадлежит фабрике конкретной
 регистрации; реестр не переносит заголовки или ключи между ними.
 
-## Следующая итерация конфигурации — только проект
+## Конфигурационные привязки Stage 4.2
 
-На Stage 4.1 новые dotenv-поля не читаются и UI-селекторы не добавлены. Предлагаемый
-следующий формат должен пройти отдельные schema/compatibility тесты:
-
-| Предлагаемое поле | Назначение / legacy fallback |
+| Поле | Назначение / legacy fallback |
 | --- | --- |
-| GENERATION_PROVIDER | Провайдер ответа; AI_PROVIDER при отсутствии |
-| GENERATION_MODEL | Модель ответа; GEMINI_MODEL при legacy Gemini |
-| TRANSCRIPTION_PROVIDER | Отдельный провайдер речи; legacy AI_PROVIDER |
-| TRANSCRIPTION_MODEL | Отдельная модель речи; legacy GEMINI_MODEL |
-| Поля авторизации конкретного подключения | Секреты привязаны к provider/connection; GEMINI_API_KEY сохраняется |
+| GENERATION_PROVIDER | gemini или openai; AI_PROVIDER при отсутствии |
+| GENERATION_MODEL | Модель ответа; GEMINI_MODEL для Gemini, gpt-5.6-terra для OpenAI |
+| TRANSCRIPTION_PROVIDER | gemini или openai; AI_PROVIDER при отсутствии |
+| TRANSCRIPTION_MODEL | Модель речи; GEMINI_MODEL для Gemini, gpt-transcribe для OpenAI |
+| OPENAI_API_KEY | Отдельный SecretStr-ключ OpenAI; GEMINI_API_KEY сохраняется |
 
-Не добавляйте предложенные поля в .env в ожидании их применения сейчас. Номер
-будущей схемы выбирается при реализации миграции; версия 1 в этом изменении не менялась.
-Сохранены env-приоритет, DACL, межпроцессная транзакция и Markdown-профили.
+Схема 2 предотвращает игнорирование этих полей старым кодом. Миграция 0/1 → 2
+сохраняет значения и комментарии, а при отсутствии новых полей остаётся Gemini.
+Группы Settings.groups.generation/transcription отражают разрешённые привязки;
+.provider сохраняет Gemini-совместимость, .openai содержит отдельную авторизацию.
+Служба требует ключи выбранных провайдеров. Полный UI выбора остаётся Stage 4.6;
+смена .env применяется после контролируемой остановки и нового запуска процессов.
+
+OpenAIProvider использует request-scoped AsyncOpenAI и HTTP-клиент с закрытием в
+worker event loop. Генерация поддерживает Responses JPEG/text и streaming, ASR —
+готовый WAV. Точные IDs, политика размеров и особенности финальных событий описаны
+в [OPENAI_PROVIDER.md](OPENAI_PROVIDER.md). Ключи не переносятся между фабриками.
 
 ## Проверки Stage 4.1
 
-Полная регрессия: 145 тестов на Python 3.10.22, 3.11.18, 3.12.10 на Windows 11;
-Ruff check, format --check и compileall успешны. Из них 29 новых проверяют реестр,
-ленивость, интерфейсы, раздельные модели, capabilities, ошибки/отмену, deadline,
-close и гонку factory/shutdown, 100 выдач без удержания клиентов, VAD FIFO, UUID,
-историю и SDK cleanup/fallback через mock. CI: workflow Windows tests в рабочей ветке. Отдельно на текущей Windows 11 реальная управляемая служба с Registry дважды запущена и штатно завершена по EOF stdin; повторный запуск успешен. Сетевые задачи в этом smoke не запускались.
+Полная регрессия: 173 теста на Python 3.10.22, 3.11.18, 3.12.10 на Windows 11;
+Ruff check, format --check и compileall успешны. Покрыты реестр, две привязки,
+capabilities, lifecycle/cancel/deadline, SDK streaming и WAV, обе смешанные связки,
+VAD FIFO, история, shutdown и миграция. OpenAI stress: 100 последовательных и 12
+конкурентных запросов с проверкой закрытия всех клиентов. CI — Windows tests рабочей ветки.
 
 ```powershell
 python -m unittest discover -s tests -v
