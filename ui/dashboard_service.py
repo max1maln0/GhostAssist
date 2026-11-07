@@ -358,6 +358,9 @@ class ServiceActions:
         self.dashboard_visible = False
         self.tray.visible = False
         self.tray.icon.update_menu()
+        notify = getattr(self.tray, "notify_hidden", None)
+        if notify:
+            notify()
 
     def show_dashboard(self):
         self.deiconify()
@@ -383,6 +386,7 @@ class ServiceActions:
             self.after(30, self.exit_app)
             return
         if self.save_jobs.busy:
+            self.exit_requested.set()
             self.set_error(
                 "Дождитесь завершения операции с конфигурацией перед выходом."
             )
@@ -403,6 +407,7 @@ class ServiceActions:
     def _begin_exit(self):
         self._end_hotkey_capture()
         self.closing = self.tray.closing = True
+        self.shutdown_notify()
         self.restart_pending = False
         for runner in (self.save_jobs, self.probe_jobs, self.device_jobs):
             runner.close()

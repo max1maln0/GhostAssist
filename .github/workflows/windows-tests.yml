@@ -21,7 +21,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
-      - run: python -m compileall -q config core platform_adapters providers ui tests main.py
-      - run: python -m ruff check config core platform_adapters providers ui tests main.py
-      - run: python -m ruff format --check config core platform_adapters providers ui tests main.py
+      - run: python -m compileall -q config core platform_adapters providers ui tests tools main.py
+      - run: python -m ruff check config core platform_adapters providers ui tests tools main.py
+      - run: python -m ruff format --check config core platform_adapters providers ui tests tools main.py
       - run: python -m unittest discover -s tests -v

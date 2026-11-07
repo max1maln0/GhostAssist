@@ -1,6 +1,13 @@
-import customtkinter as ctk
-
-from ui.dashboard_components import button, card, choice, entry, label, row, switch
+from ui.dashboard_components import (
+    DeferredOptionMenu,
+    button,
+    card,
+    choice,
+    entry,
+    label,
+    row,
+    switch,
+)
 from ui.dashboard_theme import BORDER_COLOR, SURFACE_INNER
 
 
@@ -12,7 +19,7 @@ def build(app, parent):
     )
     app.variable("AUDIO_DEVICE")
     device_row = row(body, "WASAPI Loopback")
-    app.device_combo = ctk.CTkOptionMenu(
+    app.device_combo = DeferredOptionMenu(
         device_row,
         values=["По умолчанию"],
         width=220,

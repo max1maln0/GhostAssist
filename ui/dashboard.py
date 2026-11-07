@@ -1,7 +1,21 @@
 """Dashboard 2.0 composition: widgets on Tk thread, bounded background jobs."""
 
+# ruff: noqa: E402 - protect native imports with the process boundary first.
+if __name__ == "__main__":
+    from platform_adapters.windows.process_guard import guarded_entry
+
+    def _bootstrap(shutdown_notify):
+        from ui.dashboard import main
+
+        return main(shutdown_notify)
+
+    raise SystemExit(guarded_entry(_bootstrap))
+
+import signal
+from collections import deque
 from queue import Queue
 from threading import Event
+from time import perf_counter
 
 import customtkinter as ctk
 
@@ -63,9 +77,18 @@ class DashboardApp(
         settings_path=ENV_FILE,
         profiles_directory=PROFILES,
         start_integrations=True,
+        shutdown_notify=None,
     ):
+        started = perf_counter()
         ctk.set_appearance_mode("dark")
         super().__init__(fg_color=BG_DARK)
+        self.timings = {
+            "tk_ms": (perf_counter() - started) * 1000,
+            "pages_ms": {},
+            "navigation_ms": deque(maxlen=128),
+        }
+        settings_started = perf_counter()
+        self.shutdown_notify = shutdown_notify or (lambda: None)
         self.instance, self.settings_path = instance, settings_path
         self.profiles_directory, self.integrations = (
             profiles_directory,
@@ -77,6 +100,7 @@ class DashboardApp(
         except (ValueError, OSError):
             self.settings = Settings.model_construct()
             self.last_error = "Конфигурация недоступна или некорректна. Исправьте .env перед запуском службы."
+        self.timings["settings_ms"] = (perf_counter() - settings_started) * 1000
         self.draft = SettingsDraft(self.settings)
         self.variables, self.form_widgets, self.hotkey_buttons = {}, [], {}
         self.provider_controls, self.key_controls, self.tooltips = {}, {}, []
@@ -103,7 +127,7 @@ class DashboardApp(
         self.service_state, self.external_service = "stopped", False
         self.restart_pending = self.closing = self.saving = False
         self.live_state, self.session_counts = None, (0, 0)
-        self.current_page = "overview"
+        self.current_page = None
         self.title("GhostAssist — Dashboard 2.0")
         scale = self._get_window_scaling()
         width = min(1100, int(self.winfo_screenwidth() / scale) - 40)
@@ -113,14 +137,12 @@ class DashboardApp(
         self._setup_layout()
         self.syncing_form = False
         self.sync_form()
-        self._load_profiles_list()
-        self.load_selected_profile(self.settings.active_profile, save=False)
         self.bind("<Configure>", self._resize_footer, add="+")
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         if self.integrations:
             self.tray.start()
             self._bind_dashboard_hotkey()
-            self._refresh_devices()
+        self.timings["construction_ms"] = (perf_counter() - started) * 1000
         self.after(100, self._poll_process)
 
     def _setup_layout(self):
@@ -142,6 +164,7 @@ class DashboardApp(
                 sidebar, title, lambda key=key: self.navigate(key), width=164
             )
             control.grid(row=index, column=0, padx=12, pady=5, sticky="ew")
+            control.configure(fg_color="transparent", text_color=TEXT_MUTED)
             self.nav_buttons[key] = control
         sidebar.grid_rowconfigure(10, weight=1)
         label(sidebar, "LOCAL • PRIVATE\nStage 4.2.1", muted=True, size=11).grid(
@@ -166,11 +189,12 @@ class DashboardApp(
         self.content.grid(row=1, column=1, sticky="nsew", padx=(18, 16))
         self.content.grid_rowconfigure(0, weight=1)
         self.content.grid_columnconfigure(0, weight=1)
+        self.content.grid_propagate(False)
         self.pages = {}
-        for key, (_, module) in PAGES.items():
-            frame = ScrollablePage(self.content, fg_color=BG_DARK, corner_radius=0)
-            module.build(self, frame)
-            self.pages[key] = frame
+        # StringVars are cheap and keep draft state independent of page widgets.
+        for name in type(self.settings).model_fields:
+            if not name.endswith("api_key"):
+                self.variable(name.upper())
         footer = ctk.CTkFrame(self, fg_color=SURFACE_CARD, corner_radius=0)
         footer.grid(row=2, column=1, sticky="ew")
         footer.grid_columnconfigure(0, weight=1)
@@ -211,6 +235,9 @@ class DashboardApp(
         if event.widget is not self:
             return
         narrow = self.winfo_width() / self._get_window_scaling() < 1020
+        if narrow == getattr(self, "_footer_narrow", None):
+            return
+        self._footer_narrow = narrow
         self.apply_button.grid_configure(
             row=2 if narrow else 1,
             column=0 if narrow else 2,
@@ -218,26 +245,69 @@ class DashboardApp(
             sticky="e",
         )
 
+    def ensure_page(self, page):
+        if page in self.pages:
+            return self.pages[page]
+        started = perf_counter()
+        frame = ScrollablePage(self.content, fg_color=BG_DARK, corner_radius=0)
+        previous_sync = self.syncing_form
+        previous_widgets = len(self.form_widgets)
+        self.syncing_form = True
+        try:
+            PAGES[page][1].build(self, frame)
+        except Exception:
+            del self.form_widgets[previous_widgets:]
+            if page == "providers":
+                self.provider_controls.clear()
+                self.key_controls.clear()
+            if page == "hotkeys":
+                self.hotkey_buttons.clear()
+            frame._parent_frame.destroy()
+            raise
+        finally:
+            self.syncing_form = previous_sync
+        self.pages[page] = frame
+        if page == "profiles":
+            self._load_profiles_list()
+            self.load_selected_profile(
+                self.variable("ACTIVE_PROFILE").get(), save=False
+            )
+        elif page == "audio":
+            self.device_combo.set(self.variable("AUDIO_DEVICE").get() or "По умолчанию")
+            if self.integrations:
+                self._refresh_devices()
+        self._summary_snapshot = None
+        self.refresh_provider_info()
+        self.refresh_key_states()
+        self.timings["pages_ms"][page] = (perf_counter() - started) * 1000
+        return frame
+
     def navigate(self, page):
-        if page not in PAGES:
+        if page not in PAGES or page == self.current_page:
             return
-        if (
-            self.current_page == "profiles"
-            and page != "profiles"
-            and not self.guard_profile()
-        ):
+        if self.current_page == "profiles" and not self.guard_profile():
             return
+        started = perf_counter()
         self._end_hotkey_capture()
-        for frame in self.pages.values():
-            frame.grid_remove()
-        self.pages[page].grid(row=0, column=0, sticky="nsew")
+        try:
+            frame = self.ensure_page(page)
+        except Exception:  # noqa: BLE001 - keep the current page usable
+            self.set_error(
+                "Не удалось открыть страницу. Предыдущая страница сохранена."
+            )
+            return
+        previous = self.current_page
+        if previous is not None:
+            self.pages[previous].grid_remove()
+            self.nav_buttons[previous].configure(
+                fg_color="transparent", text_color=TEXT_MUTED
+            )
+        frame.grid(row=0, column=0, sticky="nsew")
         self.current_page = page
         self.page_title.configure(text=PAGES[page][0])
-        for key, control in self.nav_buttons.items():
-            control.configure(
-                fg_color="#064e3b" if key == page else "transparent",
-                text_color=ACCENT_GREEN if key == page else TEXT_MUTED,
-            )
+        self.nav_buttons[page].configure(fg_color="#064e3b", text_color=ACCENT_GREEN)
+        self.refresh_summary()
+        self.timings["navigation_ms"].append((perf_counter() - started) * 1000)
 
     def set_error(self, text):
         self.last_error = text or "Не удалось выполнить операцию."
@@ -256,8 +326,11 @@ class DashboardApp(
             self.save_button,
             self.cancel_button,
             self.apply_button,
-            self.profile_selector,
-            self.legend_textbox,
+            *(
+                [self.profile_selector, self.legend_textbox]
+                if "profiles" in self.pages
+                else []
+            ),
             *(controls[0] for controls in self.key_controls.values()),
         ]:
             widget.configure(state=state)
@@ -323,24 +396,29 @@ class DashboardApp(
         self.overview_summary.configure(text=summary)
         session = f"Сессия  TEST {self.session_counts[0]} · INTERVIEW {self.session_counts[1]}"
         self.session_status.configure(text=session)
-        self.memory_status.configure(text=session + " · история только в RAM")
-        self.hud_status.configure(
-            text=(
-                f"HUD: {'виден' if self.live_state[1] else 'скрыт'} · {'сверху' if self.live_state[2] else 'снизу'}"
-                if self.live_state
-                else "Статус HUD недоступен до запуска управляемой службы"
+        if "profiles" in self.pages:
+            self.memory_status.configure(text=session + " · история только в RAM")
+        if "screen" in self.pages:
+            self.hud_status.configure(
+                text=(
+                    f"HUD: {'виден' if self.live_state[1] else 'скрыт'} · {'сверху' if self.live_state[2] else 'снизу'}"
+                    if self.live_state
+                    else "Статус HUD недоступен до запуска управляемой службы"
+                )
             )
-        )
-        for control in self.hud_buttons:
-            control.configure(state="normal" if state == "running" else "disabled")
-        self.screen_hotkeys.configure(
-            text=" · ".join(
-                f"{HOTKEY_LABELS[key.lower()]}: {format_hotkey(getattr(self.settings, key.lower()))}"
-                for key in ("HOTKEY_SCREEN", "HOTKEY_SNIP", "HOTKEY_HUD")
+            for control in self.hud_buttons:
+                control.configure(state="normal" if state == "running" else "disabled")
+            self.screen_hotkeys.configure(
+                text=" · ".join(
+                    f"{HOTKEY_LABELS[key.lower()]}: {format_hotkey(getattr(self.settings, key.lower()))}"
+                    for key in ("HOTKEY_SCREEN", "HOTKEY_SNIP", "HOTKEY_HUD")
+                )
             )
-        )
         diagnostic = self.last_error or "Ошибок не зарегистрировано"
-        for widget in (self.system_error, self.overview_error):
+        for widget in (
+            self.overview_error,
+            *([self.system_error] if "system" in self.pages else []),
+        ):
             widget.configure(
                 text=diagnostic, text_color=ERROR if self.last_error else TEXT_MUTED
             )
@@ -365,34 +443,45 @@ class DashboardApp(
             ),
             text_color=ERROR if self.last_error else TEXT_MUTED,
         )
-        self.configuration_status.configure(
-            text=f"Схема {self.settings.schema_version} · переменные окружения имеют приоритет над .env"
-        )
-        self.hotkey_runtime_status.configure(
-            text="Dashboard: hook активен"
-            if self.dashboard_hotkey
-            else "Dashboard: hook не зарегистрирован"
-        )
+        if "system" in self.pages:
+            self.configuration_status.configure(
+                text=f"Схема {self.settings.schema_version} · переменные окружения имеют приоритет над .env"
+            )
+        if "hotkeys" in self.pages:
+            self.hotkey_runtime_status.configure(
+                text="Dashboard: hook активен"
+                if self.dashboard_hotkey
+                else "Dashboard: hook не зарегистрирован"
+            )
 
     def _bind_dashboard_hotkey(self):
         snapshot = self.settings.model_copy(deep=True)
 
-        def finished(listener, error):
+        def prepare():
+            started = perf_counter()
+            listener = self._create_dashboard_hotkey(snapshot)
+            return listener, (perf_counter() - started) * 1000
+
+        def finished(result, error):
             if error:
                 self.set_error(
                     "Не удалось зарегистрировать глобальную клавишу Dashboard."
                 )
             else:
+                listener, elapsed = result
+                self.timings["hooks_ms"] = elapsed
                 self._replace_dashboard_hotkey(listener)
 
         self.save_jobs.submit(
-            lambda: self._create_dashboard_hotkey(snapshot),
+            prepare,
             finished,
-            lambda listener: cleanup_change(SavedChange(snapshot, listener)),
+            lambda result: (
+                cleanup_change(SavedChange(snapshot, result[0])) if result else None
+            ),
         )
 
 
-def main():
+def main(shutdown_notify=None):
     instance = SingleInstance("dashboard")
     if not instance.primary:
         try:
@@ -401,10 +490,16 @@ def main():
             instance.close()
         return
     try:
-        DashboardApp(instance).mainloop()
+        app = DashboardApp(instance, shutdown_notify=shutdown_notify)
+
+        def interrupted(*_):
+            app.shutdown_notify()
+            app.exit_requested.set()
+
+        previous_signal = signal.signal(signal.SIGINT, interrupted)
+        try:
+            app.mainloop()
+        finally:
+            signal.signal(signal.SIGINT, previous_signal)
     finally:
         instance.close()
-
-
-if __name__ == "__main__":
-    main()

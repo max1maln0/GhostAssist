@@ -16,6 +16,23 @@ from ui.dashboard_theme import (
 )
 
 
+class DeferredOptionMenu(ctk.CTkOptionMenu):
+    """Paint without recursively flushing the entire application's layout.
+
+    CTk 5.2.2 _draw ends with canvas.update_idletasks(). Let the normal Tk
+    event loop perform that work once after page construction instead.
+    Only this canvas is affected, never tkinter or other widgets globally.
+    """
+
+    def _draw(self, no_color_updates=False):
+        flush = self._canvas.update_idletasks
+        self._canvas.update_idletasks = lambda: None
+        try:
+            super()._draw(no_color_updates)
+        finally:
+            self._canvas.update_idletasks = flush
+
+
 class ScrollbarBridge:
     """Coalesce scroll telemetry outside Tk idle/layout callbacks.
 
@@ -27,9 +44,10 @@ class ScrollbarBridge:
         self.owner, self.scrollbar = owner, scrollbar
         self.root = owner.winfo_toplevel()
         self.pending = self.current = self.scheduled = None
+        self.closed = False
 
     def set(self, first, last):
-        if getattr(self.root, "destroying", False):
+        if self.closed or getattr(self.root, "destroying", False):
             return
         values = (float(first), float(last))
         if values == self.current and self.pending is None:
@@ -37,6 +55,13 @@ class ScrollbarBridge:
         self.pending = values
         if self.scheduled is None:
             self.scheduled = self.owner.after(16, self.flush)
+
+    def close(self):
+        self.closed = True
+        if self.scheduled is not None:
+            self.owner.after_cancel(self.scheduled)
+            self.scheduled = None
+        self.pending = None
 
     def flush(self):
         values, self.pending = self.pending, None
@@ -56,6 +81,10 @@ class ScrollablePage(ctk.CTkScrollableFrame):
         self.scroll_bridge = ScrollbarBridge(self, self._scrollbar)
         self._parent_canvas.configure(yscrollcommand=self.scroll_bridge.set)
 
+    def destroy(self):
+        self.scroll_bridge.close()
+        super().destroy()
+
 
 def bridge_textbox(widget):
     widget.scroll_bridges = (
@@ -65,6 +94,16 @@ def bridge_textbox(widget):
     widget._textbox.configure(
         yscrollcommand=widget.scroll_bridges[0].set,
         xscrollcommand=widget.scroll_bridges[1].set,
+    )
+    tkinter.Misc.bind(
+        widget,
+        "<Destroy>",
+        lambda event: (
+            [bridge.close() for bridge in widget.scroll_bridges]
+            if event.widget is widget
+            else None
+        ),
+        add="+",
     )
     return widget
 
@@ -153,7 +192,7 @@ def entry(app, parent, key, text, unit, hint=None):
 
 def choice(app, parent, key, text, values, hint=None, command=None):
     frame = row(parent, text, hint)
-    widget = ctk.CTkOptionMenu(
+    widget = DeferredOptionMenu(
         frame,
         variable=app.variable(key),
         values=list(values),

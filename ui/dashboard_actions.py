@@ -78,7 +78,8 @@ class SettingsActions:
         for key, value in (remaining or {}).items():
             if key in self.variables:
                 self.variables[key].set(value)
-        self.device_combo.set(self.variable("AUDIO_DEVICE").get() or "По умолчанию")
+        if "audio" in self.pages:
+            self.device_combo.set(self.variable("AUDIO_DEVICE").get() or "По умолчанию")
         self.refresh_provider_info()
         self.refresh_key_states()
         self.refresh_summary()
@@ -95,7 +96,8 @@ class SettingsActions:
         self.settings = settings
         self.draft.reset(settings)
         self.sync_form()
-        self.load_selected_profile(settings.active_profile, save=False)
+        if "profiles" in self.pages:
+            self.load_selected_profile(settings.active_profile, save=False)
 
     def provider_changed(self, purpose, provider):
         models = compatible_models(provider, purpose)

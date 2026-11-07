@@ -1,6 +1,7 @@
 """System tray callbacks enqueue commands for the Tk thread."""
 
 from threading import Event, Thread
+from time import perf_counter
 
 import pystray
 from PIL import Image, ImageDraw
@@ -9,6 +10,8 @@ from PIL import Image, ImageDraw
 class Tray:
     def __init__(self, enqueue):
         self.ready = Event()
+        self.started_at = self.ready_at = None
+        self.hidden_explained = False
         self.running = False
         self.externally_running = False
         self.visible = True
@@ -67,11 +70,25 @@ class Tray:
         )
 
     def start(self):
+        self.started_at = perf_counter()
+
         def setup(icon):
+            self.ready_at = perf_counter()
             icon.visible = True
             self.ready.set()
 
         self.icon.run_detached(setup=setup)
+
+    def notify_hidden(self):
+        if not self.hidden_explained:
+            self.hidden_explained = True
+            try:
+                self.icon.notify(
+                    "GhostAssist работает в трее. Для полного выхода выберите «Завершить GhostAssist».",
+                    "Окно скрыто, приложение работает",
+                )
+            except (OSError, NotImplementedError):
+                pass
 
     def stop(self):
         self.closing = True

@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from config.settings import load_settings
 from providers.access_check import AccessResult
-from ui.dashboard import DashboardApp
+from ui.dashboard import PAGES, DashboardApp
 
 
 class DashboardGuiTests(unittest.TestCase):
@@ -34,6 +34,8 @@ class DashboardGuiTests(unittest.TestCase):
             )
         except TclError as exc:
             self.skipTest("Graphical Tk session unavailable: " + type(exc).__name__)
+        for page in PAGES:
+            self.app.ensure_page(page)
         self.errors = []
         self.app.report_callback_exception = lambda *error: self.errors.append(error)
         self.app.update()

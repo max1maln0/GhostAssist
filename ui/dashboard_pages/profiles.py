@@ -1,6 +1,14 @@
 import customtkinter as ctk
 
-from ui.dashboard_components import bridge_textbox, button, card, choice, label, switch
+from ui.dashboard_components import (
+    DeferredOptionMenu,
+    bridge_textbox,
+    button,
+    card,
+    choice,
+    label,
+    switch,
+)
 from ui.dashboard_theme import BORDER_COLOR, SURFACE_INNER
 
 
@@ -10,7 +18,7 @@ def build(app, parent):
         "Markdown-профили",
         "Выбор профиля подготавливает смену активного профиля. Для службы изменения применяются после сохранения и перезапуска",
     )
-    app.profile_selector = ctk.CTkOptionMenu(
+    app.profile_selector = DeferredOptionMenu(
         body,
         values=[app.settings.active_profile],
         command=app.load_selected_profile,
