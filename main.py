@@ -1,5 +1,17 @@
+# ruff: noqa: E402 - protect native imports with the process boundary first.
+if __name__ == "__main__":
+    from platform_adapters.windows.process_guard import guarded_entry
+
+    def _bootstrap(shutdown_notify):
+        from main import main
+
+        return main(shutdown_notify)
+
+    raise SystemExit(guarded_entry(_bootstrap))
+
 import json
 import os
+import signal
 import sys
 from queue import Empty, Full, Queue
 from threading import Event, Thread
@@ -15,7 +27,8 @@ from ui.transcript_review import TranscriptReview
 
 
 class GhostAssistApp:
-    def __init__(self, settings, dependencies=None):
+    def __init__(self, settings, dependencies=None, shutdown_notify=None):
+        self.shutdown_notify = shutdown_notify or (lambda: None)
         dependencies = dependencies or build_dependencies(settings)
         self.settings = settings
         self.controller = ApplicationController(settings, dependencies)
@@ -195,13 +208,19 @@ class GhostAssistApp:
                 return
             if monotonic() >= self.shutdown_deadline and not self.shutdown_reported:
                 self.shutdown_reported = True
-                print("Ожидание фоновой задачи при завершении службы.", file=sys.stderr)
+                print(
+                    "Истёк срок штатного завершения службы; закрываю UI.",
+                    file=sys.stderr,
+                )
+                self.hud.root.destroy()
+                return
         self.hud.root.after(25, self.poll)
 
     def close(self):
         if self.closing:
             return
         self.closing = True
+        self.shutdown_notify()
         self.shutdown_deadline = monotonic() + 3
         self.controller.close()
         self._dismiss()
@@ -233,6 +252,9 @@ class GhostAssistApp:
     def run(self, managed):
         settings = self.settings
         self.managed = managed
+        previous_signal = signal.signal(
+            signal.SIGINT, lambda *_: self.enqueue(self.close)
+        )
         bindings = {
             settings.hotkey_screen: self.capture,
             settings.hotkey_snip: self.snip,
@@ -288,9 +310,10 @@ class GhostAssistApp:
                 raise RuntimeError("Global input listener stopped unexpectedly")
         finally:
             self.close()
+            signal.signal(signal.SIGINT, previous_signal)
 
 
-def main():
+def main(shutdown_notify=None):
     try:
         instance = SingleInstance("service")
         if not instance.primary:
@@ -298,7 +321,11 @@ def main():
             print("Служба GhostAssist уже запущена.", file=sys.stderr)
             return 3
         try:
-            return run_service()
+            return (
+                run_service()
+                if shutdown_notify is None
+                else run_service(shutdown_notify)
+            )
         finally:
             instance.close()
     except KeyboardInterrupt:
@@ -311,7 +338,7 @@ def main():
         return 1
 
 
-def run_service():
+def run_service(shutdown_notify=None):
     settings = load_settings()
     validate_hotkeys(settings)
     if not settings.has_api_key:
@@ -323,9 +350,10 @@ def run_service():
         return 2
     # Tk and MSS must see the same physical desktop coordinates.
     configure_dpi()
-    GhostAssistApp(settings).run("--managed" in sys.argv)
+    app = (
+        GhostAssistApp(settings)
+        if shutdown_notify is None
+        else GhostAssistApp(settings, shutdown_notify=shutdown_notify)
+    )
+    app.run("--managed" in sys.argv)
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
