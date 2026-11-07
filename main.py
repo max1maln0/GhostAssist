@@ -37,6 +37,7 @@ class GhostAssistApp:
         self.screenshot_id = None
         self.screenshot_discard = False
         self.screenshot_session = None
+        self.screen_context = None
         self.sessions = SessionManager(depth=settings.memory_depth)
         self.session_task = None
         self.session_question = None
@@ -146,6 +147,7 @@ class GhostAssistApp:
             self.screenshots.cancel()
             self.screenshots.drain()
             self.screenshot_id = None
+            self.screen_context = None
             self.hud.update_text("Не удалось открыть окно выделения.", "ОШИБКА")
 
     def selected(self, bbox):
@@ -156,6 +158,7 @@ class GhostAssistApp:
             self.screenshots.cancel()
             self.screenshots.drain()
             self.screenshot_id = None
+            self.screen_context = None
             self.hud.update_text("Выделение отменено или слишком мало.", "ГОТОВО")
         else:
             self._start_screen(bbox)
@@ -551,6 +554,7 @@ class GhostAssistApp:
                 self.hud.update_text(status="ГОТОВО")
             self.screenshot_id = None
             self.screenshot_session = None
+            self.screen_context = None
             self.future = None
 
     def watch_parent(self, fd):

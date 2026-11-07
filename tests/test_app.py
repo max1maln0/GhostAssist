@@ -132,6 +132,7 @@ class AppTests(unittest.TestCase):
         overlay.return_value.close.assert_called_once()
         self.assertIsNone(self.app.screenshot_id)
         self.assertFalse(self.app.screenshots.busy)
+        self.assertIsNone(self.app.screen_context)
 
     def test_shutdown_waits_for_worker_cleanup(self):
         entered = threading.Event()
