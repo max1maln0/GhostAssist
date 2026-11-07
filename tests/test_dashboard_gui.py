@@ -237,3 +237,15 @@ class DashboardGuiTests(unittest.TestCase):
         finally:
             ctk.set_widget_scaling(1)
             ctk.set_window_scaling(1)
+
+    def test_label_wrap_uses_frame_width_and_scrollbar_updates_are_bounded(self):
+        self.app.navigate("providers")
+        self.app.update()
+        info = self.app.provider_controls["generation"][1]
+        logical = int(info.winfo_width() / info._get_widget_scaling()) - 4
+        self.assertAlmostEqual(info.cget("wraplength"), max(120, logical), delta=2)
+        for page in self.app.pages.values():
+            for index in range(200):
+                page.scroll_bridge.set(0, index / 200)
+            self.assertIsNotNone(page.scroll_bridge.scheduled)
+        self.app.update()

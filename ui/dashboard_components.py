@@ -1,5 +1,7 @@
 """Reusable cards, labelled fields and disclosure sections."""
 
+import tkinter
+
 import customtkinter as ctk
 
 from ui.dashboard_theme import (
@@ -14,6 +16,59 @@ from ui.dashboard_theme import (
 )
 
 
+class ScrollbarBridge:
+    """Coalesce scroll telemetry outside Tk idle/layout callbacks.
+
+    CTk 5.2.2 scrollbar.set calls update_idletasks, which can recursively invoke
+    yscrollcommand during layout. A single timed callback breaks that recursion.
+    """
+
+    def __init__(self, owner, scrollbar):
+        self.owner, self.scrollbar = owner, scrollbar
+        self.root = owner.winfo_toplevel()
+        self.pending = self.current = self.scheduled = None
+
+    def set(self, first, last):
+        if getattr(self.root, "destroying", False):
+            return
+        values = (float(first), float(last))
+        if values == self.current and self.pending is None:
+            return
+        self.pending = values
+        if self.scheduled is None:
+            self.scheduled = self.owner.after(16, self.flush)
+
+    def flush(self):
+        values, self.pending = self.pending, None
+        self.current = values
+        try:
+            self.scrollbar.set(*values)
+        finally:
+            self.scheduled = None
+        pending, self.pending = self.pending, None
+        if pending is not None and pending != values:
+            self.set(*pending)
+
+
+class ScrollablePage(ctk.CTkScrollableFrame):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        self.scroll_bridge = ScrollbarBridge(self, self._scrollbar)
+        self._parent_canvas.configure(yscrollcommand=self.scroll_bridge.set)
+
+
+def bridge_textbox(widget):
+    widget.scroll_bridges = (
+        ScrollbarBridge(widget, widget._y_scrollbar),
+        ScrollbarBridge(widget, widget._x_scrollbar),
+    )
+    widget._textbox.configure(
+        yscrollcommand=widget.scroll_bridges[0].set,
+        xscrollcommand=widget.scroll_bridges[1].set,
+    )
+    return widget
+
+
 def label(parent, text, *, muted=False, size=14, bold=False):
     widget = ctk.CTkLabel(
         parent,
@@ -24,11 +79,15 @@ def label(parent, text, *, muted=False, size=14, bold=False):
         justify="left",
         height=0,
     )
-    widget.bind(
-        "<Configure>",
-        lambda event: widget.configure(wraplength=max(120, event.width - 4)),
-        add="+",
-    )
+
+    def resize(event):
+        # CTkLabel.bind targets its text/canvas children. Binding the actual
+        # frame avoids text-size feedback and double scaling on high-DPI screens.
+        width = max(120, int(event.width / widget._get_widget_scaling()) - 4)
+        if widget.cget("wraplength") != width:
+            widget.configure(wraplength=width)
+
+    tkinter.Misc.bind(widget, "<Configure>", resize, add="+")
     return widget
 
 

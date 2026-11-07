@@ -179,3 +179,31 @@ class ServiceStatusLifecycleTests(unittest.TestCase):
         ServiceActions._poll_process(app)
         app.refresh_summary.assert_not_called()
         app.after.assert_not_called()
+
+
+class ScrollbarBridgeTests(unittest.TestCase):
+    def test_recursive_scroll_updates_are_coalesced_and_shutdown_ignores_them(self):
+        from ui.dashboard_components import ScrollbarBridge
+
+        root = SimpleNamespace(destroying=False)
+        callbacks = []
+        owner = SimpleNamespace(
+            winfo_toplevel=lambda: root,
+            after=lambda delay, callback: callbacks.append(callback) or len(callbacks),
+        )
+        scrollbar = Mock()
+        bridge = ScrollbarBridge(owner, scrollbar)
+        bridge.set(0, 0.4)
+        bridge.set(0, 0.6)
+        self.assertEqual(len(callbacks), 1)
+        scrollbar.set.side_effect = lambda *values: bridge.set(0.1, 0.8)
+        callbacks.pop(0)()
+        scrollbar.set.assert_called_once_with(0.0, 0.6)
+        self.assertEqual(len(callbacks), 1)
+        scrollbar.set.side_effect = None
+        callbacks.pop(0)()
+        scrollbar.set.assert_called_with(0.1, 0.8)
+        self.assertEqual(callbacks, [])
+        root.destroying = True
+        bridge.set(0, 1)
+        self.assertEqual(callbacks, [])

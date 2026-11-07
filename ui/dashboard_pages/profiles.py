@@ -1,6 +1,6 @@
 import customtkinter as ctk
 
-from ui.dashboard_components import button, card, choice, label, switch
+from ui.dashboard_components import bridge_textbox, button, card, choice, label, switch
 from ui.dashboard_theme import BORDER_COLOR, SURFACE_INNER
 
 
@@ -39,6 +39,7 @@ def build(app, parent):
         wrap="word",
         undo=True,
     )
+    bridge_textbox(app.legend_textbox)
     app.legend_textbox.pack(fill="both", expand=True)
     app.legend_textbox.bind("<<Modified>>", app.profile_modified, add="+")
     memory = card(

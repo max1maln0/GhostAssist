@@ -18,7 +18,7 @@ from platform_adapters.windows.audio import WindowsAudioCapture
 from platform_adapters.windows.hotkeys import WindowsHotkeyBackend
 from platform_adapters.windows.single_instance import SingleInstance
 from ui.dashboard_actions import SettingsActions
-from ui.dashboard_components import button, label
+from ui.dashboard_components import ScrollablePage, button, label
 from ui.dashboard_hotkeys import HotkeyActions
 from ui.dashboard_jobs import JobRunner
 from ui.dashboard_pages import (
@@ -108,7 +108,7 @@ class DashboardApp(
         scale = self._get_window_scaling()
         width = min(1100, int(self.winfo_screenwidth() / scale) - 40)
         height = min(750, int(self.winfo_screenheight() / scale) - 80)
-        self.geometry(f"{width}x{height}")
+        self.geometry(f"{width}x{height}+20+20")
         self.minsize(min(760, width), min(520, height))
         self._setup_layout()
         self.syncing_form = False
@@ -168,9 +168,7 @@ class DashboardApp(
         self.content.grid_columnconfigure(0, weight=1)
         self.pages = {}
         for key, (_, module) in PAGES.items():
-            frame = ctk.CTkScrollableFrame(
-                self.content, fg_color=BG_DARK, corner_radius=0
-            )
+            frame = ScrollablePage(self.content, fg_color=BG_DARK, corner_radius=0)
             module.build(self, frame)
             self.pages[key] = frame
         footer = ctk.CTkFrame(self, fg_color=SURFACE_CARD, corner_radius=0)
@@ -203,6 +201,7 @@ class DashboardApp(
         self.navigate("overview")
 
     def destroy(self):
+        self.destroying = True
         # Tcl timers can otherwise retain deleted widget callbacks across roots.
         for callback in self.tk.call("after", "info"):
             self.tk.call("after", "cancel", callback)
