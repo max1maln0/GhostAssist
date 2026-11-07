@@ -1,9 +1,9 @@
 # Stage 4 — Multi-Provider AI: план и архитектурные решения
 
-Статус: **Stage 4.1–4.2 реализованы; Stage 4.3 и далее — план**. [Фактическая архитектура Registry](PROVIDER_REGISTRY.md). Исходная база — подтверждённый main
+Статус: **Stage 4.1–4.2.1 реализованы; Stage 4.3–4.5 отложены владельцем**. [Фактическая архитектура Registry](PROVIDER_REGISTRY.md). Исходная база — подтверждённый main
 `d85c349cde79e5b66c17900a47c867f10cd3b9b4`.
 Windows CI базы: [Python 3.10–3.12, success](https://github.com/max1maln0/GhostAssist/actions/runs/42362659203).
-Stage 4.1 добавил реальный Provider Registry, независимые runtime-привязки и проверки возможностей моделей. Stage 4.2 добавил [OpenAI Responses/Transcriptions](OPENAI_PROVIDER.md), независимые настройки и схему 2; рабочие адаптеры — Gemini и OpenAI. Следующие разделы описывают дальнейший план и не означают реализацию новых провайдеров.
+Stage 4.1 добавил реальный Provider Registry, независимые runtime-привязки и проверки возможностей моделей. Stage 4.2 добавил [OpenAI Responses/Transcriptions](OPENAI_PROVIDER.md), независимые настройки и схему 2; рабочие адаптеры — Gemini и OpenAI. Stage 4.2.1 добавил [Dashboard 2.0](DASHBOARD_2.md) для существующих Gemini/OpenAI. Следующие разделы описывают дальнейший план и не означают реализацию новых провайдеров.
 
 ## Сохранить из Stage 3
 
