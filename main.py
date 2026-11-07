@@ -77,6 +77,10 @@ class GhostAssistApp:
                 pass
 
     def capture(self):
+        if self._prepare_screen():
+            self._start_screen()
+
+    def _prepare_screen(self):
         if (
             self.closing
             or self.screenshot_id is not None
@@ -85,7 +89,7 @@ class GhostAssistApp:
             or self.capture_future is not None
             or self.segments is not None
         ):
-            return
+            return False
         request = TaskRequest("", "image/jpeg")
         mode = self.context.mode
         prompt = self.context.get_system_prompt(mode=mode)
@@ -96,14 +100,23 @@ class GhostAssistApp:
         self.screenshot_id = request.task_id
         self.screenshot_discard = False
         self.screenshot_session = (mode, generation)
+        self.screen_context = (prompt, history)
         self.hud.update_text("", "СКАН ЭКРАНА")
+        return True
+
+    def _start_screen(self, bbox=None):
+        prompt, history = self.screen_context
 
         def work(request, token, publish):
             started = monotonic()
             if token.is_set():
                 return ""
             try:
-                image = self.screen_capture.capture()
+                image = (
+                    self.screen_capture.capture(bbox)
+                    if bbox is not None
+                    else self.screen_capture.capture()
+                )
                 if token.is_set():
                     return ""
                 return self.llm.generate(
@@ -124,32 +137,28 @@ class GhostAssistApp:
         self.future = self.screenshots.future
 
     def snip(self):
-        if (
-            self.screenshot_id is not None
-            or self.monitoring
-            or self.capture_future is not None
-            or self.segments is not None
-        ):
-            return
-        task = self.tasks.begin(State.CAPTURING)
-        if not task:
+        if not self._prepare_screen():
             return
         self.hud.update_text("", "ВЫДЕЛИТЕ ОБЛАСТЬ")
         try:
             self.overlay = SnippingOverlay(self.hud.root, self.selected)
         except Exception:  # noqa: BLE001 - isolate the application boundary
-            self.tasks.finish(task)
+            self.screenshots.cancel()
+            self.screenshots.drain()
+            self.screenshot_id = None
             self.hud.update_text("Не удалось открыть окно выделения.", "ОШИБКА")
 
     def selected(self, bbox):
         self.overlay = None
-        task = self.tasks.active
+        if self.screenshot_id is None:
+            return
         if bbox is None:
-            self.tasks.finish(task)
+            self.screenshots.cancel()
+            self.screenshots.drain()
+            self.screenshot_id = None
             self.hud.update_text("Выделение отменено или слишком мало.", "ГОТОВО")
         else:
-            task.state = State.PROCESSING
-            self.submit(task, bbox=bbox)
+            self._start_screen(bbox)
 
     def audio(self):
         if self.screenshot_id is not None:
@@ -198,29 +207,20 @@ class GhostAssistApp:
             return
         task = self.tasks.begin(State.RECORDING)
         if task:
-            self.submit(task, audio=True)
+            self.submit_audio(task)
 
-    def submit(self, task, bbox=None, audio=False, audio_data=None):
-        mode = "INTERVIEW" if audio else self.context.mode
-        prompt = self.context.get_system_prompt(mode=mode)
-        generation, history = self.sessions.snapshot(mode)
-        if not self.settings.memory_enabled:
-            history = ()
+    def submit_audio(self, task, audio_data=None):
+        mode = "INTERVIEW"
+        generation, _ = self.sessions.snapshot(mode)
         self.session_task = (task, mode, generation)
         self.session_question = None
         self.task_started = monotonic()
-        status = (
-            "VAD · ТРАНСКРИБАЦИЯ"
-            if audio_data is not None
-            else ("СЛУШАЮ СИСТЕМУ" if audio else "СКАН ЭКРАНА")
-        )
+        status = "VAD · ТРАНСКРИБАЦИЯ" if audio_data is not None else "СЛУШАЮ СИСТЕМУ"
         self.hud.update_text("", status)
 
         def work():
-            started = monotonic()
-            if audio_data is not None:
-                data = audio_data
-            elif audio:
+            data = audio_data
+            if data is None:
                 data = self.audio_capture.record(
                     task.stop,
                     task.cancel,
@@ -229,34 +229,17 @@ class GhostAssistApp:
                     self.settings.audio_device,
                     vad_options=None,
                 )
-            else:
-                data = self.screen_capture.capture(bbox)
             if task.cancel.is_set():
                 return None
             task.stop.set()
-            if audio:
-                print(f"[metrics] audio_bytes={len(data)}", file=sys.stderr)
-                transcription_start = monotonic()
-                transcript = self.llm.transcribe(data, task.cancel)
-                print(
-                    f"[metrics] transcription_ms={(monotonic() - transcription_start) * 1000:.0f}",
-                    file=sys.stderr,
-                )
-                return ("transcript", transcript)
+            print(f"[metrics] audio_bytes={len(data)}", file=sys.stderr)
+            transcription_start = monotonic()
+            transcript = self.llm.transcribe(data, task.cancel)
             print(
-                f"[metrics] context_chars={sum(len(item.question) + len(item.answer) for item in history)}",
+                f"[metrics] transcription_ms={(monotonic() - transcription_start) * 1000:.0f}",
                 file=sys.stderr,
             )
-            return self.llm.generate(
-                data,
-                "audio/wav" if audio else "image/jpeg",
-                prompt,
-                task.publish,
-                task.cancel,
-                history=history,
-                budget=self.settings.task_timeout
-                - (0 if audio else monotonic() - started),
-            )
+            return ("transcript", transcript)
 
         self.future = self.worker.submit(work)
 
@@ -328,6 +311,9 @@ class GhostAssistApp:
         if self.screenshot_id is not None:
             self.screenshot_discard = True
             self.screenshots.cancel()
+            if self.overlay:
+                self.overlay.close()
+                self.overlay = None
             self.hud.update_text("Задача отменена.", "ОТМЕНА")
             return
         task = self.tasks.active
@@ -490,7 +476,7 @@ class GhostAssistApp:
                 if segment is not None:
                     print(f"[metrics] vad_silence_ms={segment[2]}", file=sys.stderr)
                     task = self.tasks.begin(State.PROCESSING)
-                    self.submit(task, audio=True, audio_data=segment[1])
+                    self.submit_audio(task, audio_data=segment[1])
                 elif not self.monitoring and self.capture_future is None:
                     self.segments.close()
                     self.segments = None

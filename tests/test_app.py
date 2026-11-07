@@ -103,6 +103,36 @@ class AppTests(unittest.TestCase):
             "Не удалось открыть окно выделения.", "ОШИБКА"
         )
 
+    def test_selected_area_uses_orchestrator_and_successful_history(self):
+        area = {"left": -20, "top": 10, "width": 100, "height": 80}
+        with (
+            patch("main.SnippingOverlay"),
+            patch.object(
+                self.app.screen_capture, "capture", return_value=b"jpg"
+            ) as capture,
+            patch.object(
+                self.app.llm, "generate", return_value="Вопрос: Область?\nОтвет: Да"
+            ),
+        ):
+            self.app.snip()
+            self.assertIs(self.app.tasks.state, State.IDLE)
+            self.assertIs(self.app.screenshots.state, Lifecycle.CREATED)
+            self.app.audio()
+            self.app.selected(area)
+            self.app.future.result(2)
+            self.app.poll()
+        capture.assert_called_once_with(area)
+        self.assertEqual(self.app.sessions.snapshot("TEST")[1][0].answer, "Да")
+
+    def test_cancel_selection_releases_orchestrator_without_running_capture(self):
+        with patch("main.SnippingOverlay") as overlay:
+            self.app.snip()
+            self.app.cancel()
+            self.app.poll()
+        overlay.return_value.close.assert_called_once()
+        self.assertIsNone(self.app.screenshot_id)
+        self.assertFalse(self.app.screenshots.busy)
+
     def test_shutdown_waits_for_worker_cleanup(self):
         entered = threading.Event()
         release = threading.Event()
