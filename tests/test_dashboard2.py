@@ -68,3 +68,114 @@ class ServiceDashboardTests(unittest.TestCase):
             self.assertTrue(ServiceActions.send_service(app, command))
         self.assertFalse(ServiceActions.send_service(app, b"unknown"))
         self.assertEqual(process.stdin.write.call_count, 4)
+
+
+class ServiceStatusLifecycleTests(unittest.TestCase):
+    def app(self):
+        import threading
+
+        from config.settings import Settings
+
+        process = Mock()
+        process.poll.return_value = None
+        app = SimpleNamespace(
+            save_jobs=Mock(),
+            probe_jobs=Mock(),
+            device_jobs=Mock(),
+            closing=False,
+            assistant_process=process,
+            dashboard_hotkey=None,
+            exit_requested=threading.Event(),
+            instance=None,
+            tray_commands=Queue(64),
+            service_updates=Queue(32),
+            stopping_until=None,
+            start_deadline=10**20,
+            starting_settings=Settings(_env_file=None),
+            applied=None,
+            running_settings=None,
+            service_state="starting",
+            live_state=None,
+            session_counts=(0, 0),
+            integrations=False,
+            external_service=False,
+            tray=SimpleNamespace(
+                running=False, externally_running=False, ready=threading.Event()
+            ),
+            set_error=Mock(),
+            refresh_summary=Mock(),
+            after=Mock(),
+            _poll_process=Mock(),
+            restart_pending=False,
+            toggle_assistant_process=Mock(),
+            _finish_exit=Mock(),
+        )
+        app._service_running = lambda: ServiceActions._service_running(app)
+        app._stop_process = lambda: ServiceActions._stop_process(app)
+        return app
+
+    def test_ready_acknowledges_actual_config_and_stale_process_is_ignored(self):
+        from config.settings import service_signature
+
+        app = self.app()
+        value = {
+            "signature": service_signature(app.starting_settings),
+            "generation": ["gemini", "gemini-3.5-flash-lite"],
+            "transcription": ["gemini", "gemini-3.5-flash-lite"],
+            "vad": False,
+        }
+        app.service_updates.put((Mock(), ("session", (99, 99))))
+        app.service_updates.put((app.assistant_process, ("ready", value)))
+        app.service_updates.put(
+            (app.assistant_process, ("state", ["TEST", True, False, False]))
+        )
+        ServiceActions._poll_process(app)
+        self.assertEqual(app.service_state, "running")
+        self.assertIs(app.running_settings, app.starting_settings)
+        self.assertEqual(app.session_counts, (0, 0))
+        self.assertEqual(app.live_state[0], "TEST")
+
+    def test_different_child_snapshot_does_not_claim_saved_settings_active(self):
+        app = self.app()
+        value = {
+            "signature": "0" * 64,
+            "generation": ["openai", "gpt-5.6-terra"],
+            "transcription": ["openai", "gpt-transcribe"],
+            "vad": False,
+        }
+        app.service_updates.put((app.assistant_process, ("ready", value)))
+        ServiceActions._poll_process(app)
+        self.assertIsNone(app.running_settings)
+        self.assertEqual(app.applied["generation"][0], "openai")
+
+    def test_stopping_rejects_late_results_and_watchdog_kills_only_owned_child(self):
+        app = self.app()
+        app.start_deadline = None
+        app.stopping_until = 1
+        app.service_state = "stopping"
+        app.service_updates.put((app.assistant_process, ("session", (99, 99))))
+        ServiceActions._poll_process(app)
+        self.assertEqual(app.session_counts, (0, 0))
+        app.assistant_process.kill.assert_called_once()
+
+    def test_crash_resets_status_and_sessions(self):
+        app = self.app()
+        app.assistant_process.poll.return_value = 7
+        app.session_counts = (4, 2)
+        ServiceActions._poll_process(app)
+        self.assertEqual(app.service_state, "error")
+        self.assertIsNone(app.assistant_process)
+        self.assertEqual(app.session_counts, (0, 0))
+        app.set_error.assert_called_once()
+
+    def test_exit_during_job_callback_never_touches_destroyed_widgets(self):
+        app = self.app()
+
+        def exit_now():
+            app.closing = True
+            app.assistant_process = None
+
+        app.save_jobs.poll.side_effect = exit_now
+        ServiceActions._poll_process(app)
+        app.refresh_summary.assert_not_called()
+        app.after.assert_not_called()

@@ -1,5 +1,6 @@
 """Real CustomTkinter integration tests with isolated .env/profiles and fake I/O."""
 
+import faulthandler
 import os
 import tempfile
 import time
@@ -15,6 +16,8 @@ from ui.dashboard import DashboardApp
 
 class DashboardGuiTests(unittest.TestCase):
     def setUp(self):
+        faulthandler.dump_traceback_later(90, exit=True)
+        self.addCleanup(faulthandler.cancel_dump_traceback_later)
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
         self.environment = patch.dict(os.environ, {}, clear=True)
@@ -193,3 +196,44 @@ class DashboardGuiTests(unittest.TestCase):
             self.app.probe_states.clear()
             self.pump(self.app.probe_jobs)
         self.assertNotIn("Old result", self.app.key_controls["gemini"][1].cget("text"))
+
+    def test_discard_profile_does_not_resave_it_on_key_write(self):
+        self.app.legend_textbox.insert("end", "Discard this edit")
+        self.app.update()
+        self.assertTrue(self.app.profile_dirty)
+        with patch(
+            "ui.dashboard_profiles.messagebox.askyesnocancel", return_value=False
+        ):
+            self.assertTrue(self.app.guard_profile())
+        self.assertFalse(self.app.profile_dirty)
+        self.assertEqual(self.app.legend_textbox.get("1.0", "end-1c"), "")
+        entry = self.app.key_controls["openai"][0]
+        entry.insert(0, "offline-key")
+        with patch.object(self.app, "save_current_legend") as save:
+            self.app.save_key("openai")
+            self.pump(self.app.save_jobs)
+        save.assert_not_called()
+
+    def test_logical_scaling_125_and_150_keeps_actions_inside_window(self):
+        import customtkinter as ctk
+
+        try:
+            for factor in (1.25, 1.5):
+                ctk.set_widget_scaling(factor)
+                ctk.set_window_scaling(factor)
+                self.app.geometry("800x540")
+                for page in self.app.pages:
+                    self.app.navigate(page)
+                    self.app.update()
+                    for widget in (
+                        self.app.apply_button,
+                        self.app.cancel_button,
+                        self.app.save_button,
+                    ):
+                        self.assertLessEqual(
+                            widget.winfo_rootx() + widget.winfo_width(),
+                            self.app.winfo_rootx() + self.app.winfo_width(),
+                        )
+        finally:
+            ctk.set_widget_scaling(1)
+            ctk.set_window_scaling(1)
