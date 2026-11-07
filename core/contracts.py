@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 
 class TaskStatus(str, Enum):
+    WAITING = "waiting"
     STARTED = "started"
     PROGRESS = "progress"
     CHUNK = "chunk"

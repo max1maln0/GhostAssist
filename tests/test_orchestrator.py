@@ -3,10 +3,33 @@ import time
 import unittest
 
 from core.contracts import TaskRequest, TaskStatus
-from core.orchestrator import Lifecycle, TaskOrchestrator
+from core.orchestrator import AwaitInput, Lifecycle, TaskOrchestrator
 
 
 class OrchestratorTests(unittest.TestCase):
+    def test_waiting_keeps_id_and_releases_handler_before_resume(self):
+        request = TaskRequest("q", "text/plain")
+        self.orchestrator.prepare(request)
+        self.orchestrator.start(lambda *_: AwaitInput("transcript"), 1)
+        self.orchestrator.future.result(1)
+        self.assertIs(self.orchestrator.state, Lifecycle.WAITING)
+        self.assertTrue(self.orchestrator.busy)
+        self.assertEqual(self.orchestrator.drain()[-1].status, TaskStatus.WAITING)
+        self.orchestrator.start(lambda *_: "answer", 1)
+        self.orchestrator.future.result(1)
+        event = self.orchestrator.drain()[-1]
+        self.assertEqual(event.task_id, request.task_id)
+        self.assertEqual(event.status, TaskStatus.COMPLETED)
+
+    def test_cancel_waiting_then_reject_resume(self):
+        self.orchestrator.prepare(TaskRequest("q", "text/plain"))
+        self.orchestrator.start(lambda *_: AwaitInput("transcript"), 1)
+        self.orchestrator.future.result(1)
+        self.orchestrator.drain()
+        self.assertTrue(self.orchestrator.cancel())
+        with self.assertRaises(RuntimeError):
+            self.orchestrator.start(lambda *_: "late", 1)
+
     def setUp(self):
         self.orchestrator = TaskOrchestrator(event_limit=4)
         self.addCleanup(self.orchestrator.close)

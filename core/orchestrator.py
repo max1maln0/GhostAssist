@@ -2,6 +2,7 @@
 
 from collections import deque
 from concurrent.futures import CancelledError, ThreadPoolExecutor, TimeoutError
+from dataclasses import dataclass, field
 from enum import Enum
 from threading import Lock, Timer
 from typing import Callable, Protocol
@@ -16,6 +17,7 @@ from core.contracts import (
 
 
 class Lifecycle(str, Enum):
+    WAITING = "waiting"
     CREATED = "created"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -31,13 +33,18 @@ class TaskFailure(Exception):
         self.error = error
 
 
+@dataclass(frozen=True)
+class AwaitInput:
+    text: str = field(repr=False)
+
+
 class Handler(Protocol):
     def __call__(
         self,
         request: TaskRequest,
         cancel: CancellationSignal,
         publish: Callable[[TaskStatus, str | None], None],
-    ) -> str: ...
+    ) -> str | AwaitInput: ...
 
 
 class TaskOrchestrator:
@@ -67,15 +74,17 @@ class TaskOrchestrator:
     @property
     def busy(self):
         with self._lock:
-            return self._state in (Lifecycle.CREATED, Lifecycle.RUNNING) or bool(
-                self._future and not self._future.done()
-            )
+            return self._state in (
+                Lifecycle.CREATED,
+                Lifecycle.RUNNING,
+                Lifecycle.WAITING,
+            ) or bool(self._future and not self._future.done())
 
     def prepare(self, request: TaskRequest):
         with self._lock:
             if self._closed or (self._future and not self._future.done()):
                 raise RuntimeError("executor is busy or closed")
-            if self._state in (Lifecycle.CREATED, Lifecycle.RUNNING):
+            if self._state in (Lifecycle.CREATED, Lifecycle.RUNNING, Lifecycle.WAITING):
                 raise RuntimeError("task is already active")
             if self._events:
                 raise RuntimeError("previous events must be consumed")
@@ -88,8 +97,15 @@ class TaskOrchestrator:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
         with self._lock:
-            if self._closed or self._state is not Lifecycle.CREATED:
+            if self._closed or self._state not in (
+                Lifecycle.CREATED,
+                Lifecycle.WAITING,
+            ):
                 raise RuntimeError("task is not ready")
+            if self._future and not self._future.done():
+                raise RuntimeError("previous handler has not released resources")
+            if self._state is Lifecycle.WAITING and self._events:
+                raise RuntimeError("waiting events must be consumed")
             request, token = self._request, self._token
             self._state = Lifecycle.RUNNING
             self._events.append(TaskEvent(request.task_id, TaskStatus.STARTED))
@@ -121,7 +137,21 @@ class TaskOrchestrator:
                 error=TaskError("handler", "Ошибка выполнения задачи."),
             )
         else:
-            self._finish(request.task_id, Lifecycle.COMPLETED, text=result)
+            if isinstance(result, AwaitInput):
+                with self._lock:
+                    if (
+                        self._state is Lifecycle.RUNNING
+                        and self._request.task_id == request.task_id
+                    ):
+                        self._state = Lifecycle.WAITING
+                        self._timer.cancel()
+                        self._events.append(
+                            TaskEvent(
+                                request.task_id, TaskStatus.WAITING, text=result.text
+                            )
+                        )
+            else:
+                self._finish(request.task_id, Lifecycle.COMPLETED, text=result)
 
     def _finish(self, task_id, state, *, text=None, error=None):
         with self._lock:
@@ -153,7 +183,11 @@ class TaskOrchestrator:
 
     def cancel(self):
         with self._lock:
-            if self._state not in (Lifecycle.CREATED, Lifecycle.RUNNING):
+            if self._state not in (
+                Lifecycle.CREATED,
+                Lifecycle.RUNNING,
+                Lifecycle.WAITING,
+            ):
                 return False
             self._token.cancel()
             self._state = Lifecycle.CANCELLED
