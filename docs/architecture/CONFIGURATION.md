@@ -51,3 +51,7 @@ API-ключ исключён из repr Settings и ProviderConfig. Ошибки
 | `HOTKEY_CANCEL` | `<class 'str'>` | `<ctrl>+<shift>+<f12>` | UI / Dashboard, main |
 | `HOTKEY_PAGE_UP` | `<class 'str'>` | `<alt>+<page_up>` | UI / Dashboard, main |
 | `HOTKEY_PAGE_DOWN` | `<class 'str'>` | `<alt>+<page_down>` | UI / Dashboard, main |
+
+## Привязки Stage 4.1
+
+Provider Registry уже используется приложением. Legacy AI_PROVIDER/GEMINI_MODEL разрешаются в две отдельные runtime-привязки генерации и транскрибации. Номер схемы остаётся 1, новые dotenv-поля и UI-селекторы не добавлены. Разные привязки задаются в доверенной точке сборки; проект будущих имён и правила совместимости описаны в [PROVIDER_REGISTRY.md](PROVIDER_REGISTRY.md). Неизвестная GEMINI_MODEL сохраняется и загружается, но запрос блокируется до появления подтверждённых возможностей.
