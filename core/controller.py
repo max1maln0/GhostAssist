@@ -383,3 +383,8 @@ class ApplicationController:
             self.orchestrator.close()
             self._source.shutdown(wait=False, cancel_futures=True)
             self.sessions.close()
+            # Optional composition-owned resource owner. Active provider leases
+            # unwind on the already-cancelled worker; this hook never joins it.
+            close_dependencies = getattr(self.dependencies, "close", None)
+            if close_dependencies is not None:
+                close_dependencies()

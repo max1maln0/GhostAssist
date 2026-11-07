@@ -108,6 +108,8 @@ class ProviderRegistry:
         try:
             try:
                 provider = entry.factory(binding.model_id)
+            except ProviderError:
+                raise
             except Exception:  # noqa: BLE001 - sanitize trusted factory failures
                 raise ProviderError(
                     ProviderErrorCode.INVALID_PROVIDER, "Не удалось создать провайдер."

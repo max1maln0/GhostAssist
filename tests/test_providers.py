@@ -127,7 +127,7 @@ class ProviderTests(unittest.TestCase):
                 provider = GeminiProvider(
                     Settings(_env_file=None, gemini_api_key="test")
                 )
-                provider.client.models = ("test",)
+                provider.client.models = (provider.client.model,)
                 error_cls = errors.ServerError if status >= 500 else errors.ClientError
                 fake = FakeGemini([[error_cls(status, {"message": "sensitive"})]])
                 with patch("providers.gemini_client.genai.Client", return_value=fake):

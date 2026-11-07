@@ -274,6 +274,10 @@ class RegistryTests(unittest.TestCase):
             provider.close.assert_called_once()
 
     def test_factory_and_operation_errors_are_sanitized_and_clients_closed(self):
+        self.factory.side_effect = ProviderError(
+            ProviderErrorCode.AUTH_FAILED, "Authentication failed"
+        )
+        self.assert_code(ProviderErrorCode.AUTH_FAILED, self.generate)
         self.factory.side_effect = RuntimeError("private-api-key")
         self.assertNotIn(
             "private-api-key",

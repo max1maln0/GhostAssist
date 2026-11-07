@@ -10,7 +10,9 @@ from google import genai
 from google.genai import errors, types
 
 from config.settings import GEMINI_MODELS
-from core.provider_contracts import ProviderError, ProviderErrorCode
+from core.provider_contracts import GenerationRequest, ProviderError, ProviderErrorCode
+from core.provider_routing import TRANSCRIPTION_INSTRUCTION, TRANSCRIPTION_PROMPT
+from providers.gemini_catalog import GEMINI_MODEL_CAPABILITIES, validate_model
 
 
 class GenerationError(ProviderError):
@@ -19,12 +21,38 @@ class GenerationError(ProviderError):
 
 
 class GeminiClient:
-    def __init__(self, settings):
+    def __init__(self, settings, model=None):
         self.settings = settings
         self.configuration = settings.groups.provider
-        self.models = tuple(dict.fromkeys((self.configuration.model, *GEMINI_MODELS)))
+        self.model = model if model is not None else self.configuration.model
+        self.models = tuple(dict.fromkeys((self.model, *GEMINI_MODELS)))
+        self.model_catalog = GEMINI_MODEL_CAPABILITIES
 
-    async def _generate(self, data, mime_type, prompt, publish, history, instruction):
+    async def _generate(
+        self,
+        data,
+        mime_type,
+        prompt,
+        publish,
+        history,
+        instruction,
+        transcription=False,
+    ):
+        request = GenerationRequest(data, mime_type, prompt, history, instruction)
+        candidates = []
+        for model in self.models:
+            try:
+                validate_model(
+                    self.model_catalog, model, request, transcription=transcription
+                )
+            except ProviderError:
+                continue
+            candidates.append(model)
+        if not candidates:
+            raise GenerationError(
+                "Нет совместимых резервных моделей Gemini.",
+                ProviderErrorCode.UNSUPPORTED_CAPABILITY,
+            )
         options = types.HttpOptions(
             timeout=int(self.configuration.request_timeout * 1000),
             retry_options=types.HttpRetryOptions(attempts=1),
@@ -38,7 +66,7 @@ class GeminiClient:
             async with client.aio as api:
                 last = "Модель не вернула ответ."
                 last_code = ProviderErrorCode.PROVIDER_ERROR
-                for index, model in enumerate(self.models):
+                for index, model in enumerate(candidates):
                     print(f"[metrics] api_attempt={index + 1}", file=sys.stderr)
                     if index:
                         publish("")
@@ -183,6 +211,7 @@ class GeminiClient:
         budget=None,
         history=(),
         instruction=None,
+        transcription=False,
     ):
         async def run():
             if cancel.is_set():
@@ -193,7 +222,15 @@ class GeminiClient:
                     "Превышено общее время обработки.", ProviderErrorCode.TIMEOUT
                 )
             task = asyncio.create_task(
-                self._generate(data, mime_type, prompt, publish, history, instruction)
+                self._generate(
+                    data,
+                    mime_type,
+                    prompt,
+                    publish,
+                    history,
+                    instruction,
+                    transcription,
+                )
             )
             loop = asyncio.get_running_loop()
             deadline = loop.time() + timeout
@@ -226,9 +263,10 @@ class GeminiClient:
         return self.generate(
             data,
             "audio/wav",
-            "Точно транскрибируй речь на исходном языке. Верни только произнесённый текст.",
+            TRANSCRIPTION_PROMPT,
             lambda _: None,
             cancel,
             budget=budget,
-            instruction="Распознай речь. Сохрани язык и слова говорящего.",
+            instruction=TRANSCRIPTION_INSTRUCTION,
+            transcription=True,
         )
