@@ -15,7 +15,7 @@ from providers.gemini import GeminiProvider
 
 @dataclass
 class Dependencies:
-    screenshots: TaskOrchestrator
+    orchestrator: TaskOrchestrator
     provider: AIProvider
     transcription: TranscriptionProvider
     screen: ScreenCapture
@@ -28,7 +28,7 @@ def build_dependencies(settings):
     provider = GeminiProvider(settings)
     screen = WindowsScreenCapture(settings.crop_width, settings.crop_height)
     return Dependencies(
-        screenshots=TaskOrchestrator(),
+        orchestrator=TaskOrchestrator(),
         provider=provider,
         transcription=provider,
         screen=screen,

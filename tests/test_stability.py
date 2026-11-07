@@ -21,29 +21,7 @@ from config.settings import Settings, profile_path, validate_hotkeys
 from core.audio_queue import AudioError, SegmentQueue
 from core.llm_worker import GenerationError, LLMWorker
 from core.session_manager import Interaction
-from core.task_state import State, TaskState
 from platform_adapters.windows.audio import record_wav
-
-
-class TaskTests(unittest.TestCase):
-    def test_conflict_cancel_and_stale_results(self):
-        controller = TaskState()
-        self.assertIs(controller.state, State.IDLE)
-        task = controller.begin(State.RECORDING)
-        self.assertIsNone(controller.begin(State.CAPTURING))
-        task.publish("partial")
-        self.assertEqual(task.preview(), "partial")
-        task.state = State.STREAMING
-        controller.cancel()
-        self.assertIs(controller.state, State.CANCELLING)
-        task.publish("late")
-        self.assertIsNone(task.preview())
-        self.assertIsNone(controller.begin(State.PROCESSING))
-        controller.finish(task)
-        next_task = controller.begin(State.CAPTURING)
-        controller.finish(task)
-        self.assertIs(controller.active, next_task)
-        self.assertIsNone(next_task.preview())
 
 
 class FakeAudio:

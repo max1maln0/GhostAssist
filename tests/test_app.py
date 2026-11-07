@@ -1,441 +1,267 @@
 import threading
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-import main
+from mock_provider import MockProvider
+
 from config.settings import Settings
-from core.orchestrator import Lifecycle
-from core.task_state import State
+from core.audio_queue import AudioError
+from core.controller import ApplicationController, ViewKind
+from core.llm_worker import LLMWorker
+from core.orchestrator import Lifecycle, TaskOrchestrator
 
 
 class AppTests(unittest.TestCase):
-    def setUp(self):
-        with patch("main.StealthHUD"):
-            self.app = main.GhostAssistApp(Settings(_env_file=None))
-        self.addCleanup(self.app.worker.shutdown)
-        self.addCleanup(self.app.capture_worker.shutdown)
-        self.addCleanup(self.app.screenshots.close)
+    def test_audio_failure_and_empty_transcription_recover(self):
+        with patch.object(
+            self.deps.audio, "record", side_effect=AudioError("Устройство отключилось.")
+        ):
+            self.app.audio()
+            views = self.finish()
+        self.assertTrue(any(v.status == "ОШИБКА" for v in views))
+        with patch.object(self.deps.llm, "transcribe", return_value=""):
+            self.app.audio()
+            views = self.finish()
+        self.assertFalse(any(v.kind is ViewKind.REVIEW for v in views))
+        self.app.audio()
+        self.finish()
+        self.assertIs(self.app.orchestrator.state, Lifecycle.WAITING)
 
-    def test_audio_toggle_blocks_screen_and_updates_hud(self):
+    def test_selection_cancel_and_mode_conflicts(self):
+        self.app.snip()
+        task_id = self.app.active.request.task_id
+        mode = self.app.context.mode
+        self.app.switch_mode()
+        self.assertEqual(self.app.context.mode, mode)
+        self.app.selected(task_id, None)
+        self.app.poll()
+        self.assertIsNone(self.app.active)
+        self.app.switch_mode()
+        self.assertNotEqual(self.app.context.mode, mode)
+
+    def test_pending_cancellation_prevents_success_delivery(self):
+        self.app.capture()
+        self.app.orchestrator.future.result(2)
+        cancel = threading.Event()
+        cancel.set()
+        views = self.app.poll(cancel)
+        self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
+        self.assertFalse(any(v.text and "Ответ:" in v.text for v in views))
+
+    def test_vad_overflow_cancel_and_restart(self):
+        self.settings.vad_enabled = True
+        emitted = threading.Event()
+
+        def record(stop, cancel, *args, **kwargs):
+            for number in range(1, 10):
+                kwargs["on_segment"](number, b"wav")
+            emitted.set()
+            stop.wait(2)
+            return b""
+
+        self.deps.audio.record.side_effect = record
+        self.app.audio()
+        self.assertTrue(emitted.wait(1))
+        self.app.poll()
+        self.assertEqual(self.app.dropped, 5)
+        future = self.app.source_future
+        self.app.cancel()
+        future.result(2)
+        if self.app.orchestrator.future:
+            self.app.orchestrator.future.result(2)
+        self.app.poll()
+        self.assertFalse(self.app.busy)
+        self.assertIsNone(self.app.segments)
+
+    def test_ui_review_callback_uses_controller(self):
+        from main import GhostAssistApp
+
+        self.cleanup_for_replacement()
+        deps = SimpleNamespace(**vars(self.deps))
+        deps.orchestrator = TaskOrchestrator()
+        deps.hotkeys = Mock()
+        with patch("main.StealthHUD"):
+            ui = GhostAssistApp(self.settings, dependencies=deps)
+        # This adapter owns the shared dependencies for the remainder of this test.
+        self.app = ui.controller
+        with patch("main.TranscriptReview") as review:
+            ui.audio()
+            ui.future.result(2)
+            ui.poll()
+            callback = review.call_args.args[2]
+            callback("изменено")
+            ui.future.result(2)
+            ui.poll()
+        self.assertEqual(ui.sessions.snapshot("INTERVIEW")[1][0].question, "изменено")
+
+    def cleanup_for_replacement(self):
+        self.app.close()
+        self.app.orchestrator.close(timeout=2)
+        self.app._source.shutdown(wait=True)
+
+    def setUp(self):
+        self.settings = Settings(_env_file=None)
+        self.deps = SimpleNamespace(
+            orchestrator=TaskOrchestrator(),
+            screen=SimpleNamespace(capture=Mock(return_value=b"jpg")),
+            audio=SimpleNamespace(record=Mock(return_value=b"wav")),
+            llm=LLMWorker(
+                self.settings,
+                provider=MockProvider(chunks=("Вопрос: Вопрос?\nОтвет: Ответ",)),
+            ),
+        )
+        self.app = ApplicationController(self.settings, self.deps)
+
+    def tearDown(self):
+        self.app.close()
+        self.app.orchestrator.close(timeout=2)
+        self.app._source.shutdown(wait=True)
+
+    def finish(self):
+        self.app.orchestrator.future.result(2)
+        return self.app.poll()
+
+    def test_100_screen_tasks_and_selection(self):
+        for _ in range(100):
+            self.app.capture()
+            self.finish()
+            self.assertIsNone(self.app.active)
+        self.assertEqual(
+            len(self.app.sessions.snapshot("TEST")[1]), self.settings.memory_depth
+        )
+        self.app.snip()
+        task_id = self.app.active.request.task_id
+        self.app.poll()
+        bbox = {"left": -20, "top": 0, "width": 80, "height": 80}
+        self.app.selected(task_id, bbox)
+        self.finish()
+        self.deps.screen.capture.assert_called_with(bbox)
+
+    def test_manual_audio_stop_and_confirm_same_uuid(self):
         entered = threading.Event()
 
-        def record(stop, cancel, seconds, max_bytes, device_name, vad_options=None):
+        def record(stop, cancel, *args, **kwargs):
             entered.set()
-            if not stop.wait(2):
-                raise TimeoutError
+            stop.wait(2)
             return b"wav"
 
-        with patch.object(
-            self.app.audio_capture, "record", side_effect=record
-        ) as capture:
-            with patch.object(
-                self.app.llm, "transcribe", return_value="question"
-            ) as transcribe:
-                with patch.object(self.app, "show_transcript") as review:
-                    self.app.audio()
-                    self.assertTrue(entered.wait(2))
-                    self.app.capture()
-                    self.app.snip()
-                    self.assertIs(self.app.tasks.state, State.RECORDING)
-                    self.app.audio()
-                    self.app.audio()
-                    self.app.future.result(timeout=2)
-                    self.app.poll()
-                    self.assertIs(self.app.tasks.state, State.REVIEW)
-                    review.assert_called_once()
-                    self.assertEqual(transcribe.call_args.args[0], b"wav")
-                    capture.assert_called_once()
-
-    def test_one_hundred_sequential_mock_requests_keep_state_bounded(self):
-        with (
-            patch.object(self.app.screen_capture, "capture", return_value=b"jpg"),
-            patch.object(
-                self.app.llm,
-                "generate",
-                return_value="Вопрос: Вопрос?\nОтвет: Ответ",
-            ) as generate,
-        ):
-            for _ in range(100):
-                self.app.capture()
-                self.app.future.result(timeout=2)
-                self.app.poll()
-                self.assertIs(self.app.tasks.state, State.IDLE)
-            self.assertEqual(generate.call_count, 100)
-            self.assertLessEqual(
-                len(self.app.sessions.snapshot("TEST")[1]),
-                self.app.settings.memory_depth,
-            )
-
-    def test_cancel_drops_result_even_if_worker_returns_success(self):
-        entered = threading.Event()
-
-        def generate(data, mime_type, prompt, publish, cancel, **kwargs):
-            publish("partial")
-            entered.set()
-            if not cancel.wait(2):
-                raise TimeoutError
-            publish("late")
-            return "stale success"
-
-        with patch.object(self.app.screen_capture, "capture", return_value=b"jpg"):
-            with patch.object(self.app.llm, "generate", side_effect=generate):
-                self.app.capture()
-                self.assertTrue(entered.wait(2))
-                self.app.poll()
-                self.assertIs(self.app.screenshots.state, Lifecycle.RUNNING)
-                self.app.hud.update_text.assert_called_with("partial", "ЗАПРОС GEMINI")
-                self.app.enqueue(self.app.cancel)
-                self.app.poll()
-                future = self.app.future
-                if future:
-                    future.result(timeout=2)
-                    self.app.poll()
-                self.assertIs(self.app.tasks.state, State.IDLE)
-                displayed = str(self.app.hud.update_text.call_args_list)
-                self.assertNotIn("late", displayed)
-                self.assertNotIn("stale success", displayed)
-
-    def test_overlay_failure_returns_to_idle(self):
-        with patch("main.SnippingOverlay", side_effect=OSError):
-            self.app.snip()
-        self.assertIs(self.app.tasks.state, State.IDLE)
-        self.app.hud.update_text.assert_called_with(
-            "Не удалось открыть окно выделения.", "ОШИБКА"
+        self.deps.audio.record.side_effect = record
+        self.app.audio()
+        self.assertTrue(entered.wait(1))
+        task_id = self.app.active.request.task_id
+        self.app.capture()
+        self.app.snip()
+        self.deps.screen.capture.assert_not_called()
+        self.app.audio()
+        views = self.finish()
+        self.assertIs(self.app.orchestrator.state, Lifecycle.WAITING)
+        self.assertTrue(any(v.kind is ViewKind.REVIEW for v in views))
+        self.assertTrue(self.app.confirm(task_id, "исправлено"))
+        self.assertEqual(self.app.active.request.task_id, task_id)
+        self.finish()
+        self.assertEqual(
+            self.app.sessions.snapshot("INTERVIEW")[1][0].question, "исправлено"
         )
 
-    def test_selected_area_uses_orchestrator_and_successful_history(self):
-        area = {"left": -20, "top": 10, "width": 100, "height": 80}
-        with (
-            patch("main.SnippingOverlay"),
-            patch.object(
-                self.app.screen_capture, "capture", return_value=b"jpg"
-            ) as capture,
-            patch.object(
-                self.app.llm, "generate", return_value="Вопрос: Область?\nОтвет: Да"
-            ),
-        ):
-            self.app.snip()
-            self.assertIs(self.app.tasks.state, State.IDLE)
-            self.assertIs(self.app.screenshots.state, Lifecycle.CREATED)
-            self.app.audio()
-            self.app.selected(area)
-            self.app.future.result(2)
-            self.app.poll()
-        capture.assert_called_once_with(area)
-        self.assertEqual(self.app.sessions.snapshot("TEST")[1][0].answer, "Да")
+    def test_cancel_review(self):
+        self.app.audio()
+        self.finish()
+        self.app.cancel_current()
+        self.app.cancel_current()
+        self.app.poll()
+        self.assertIsNone(self.app.active)
+        self.assertEqual(self.app.sessions.snapshot("INTERVIEW")[1], ())
 
-    def test_cancel_selection_releases_orchestrator_without_running_capture(self):
-        with patch("main.SnippingOverlay") as overlay:
-            self.app.snip()
-            self.app.cancel()
-            self.app.poll()
-        overlay.return_value.close.assert_called_once()
-        self.assertIsNone(self.app.screenshot_id)
-        self.assertFalse(self.app.screenshots.busy)
-        self.assertIsNone(self.app.screen_context)
-
-    def test_shutdown_waits_for_worker_cleanup(self):
-        entered = threading.Event()
-        release = threading.Event()
-
-        def generate(data, mime_type, prompt, publish, cancel, **kwargs):
-            entered.set()
-            if not cancel.wait(2) or not release.wait(2):
-                raise TimeoutError
-            return None
-
-        with patch.object(self.app.screen_capture, "capture", return_value=b"jpg"):
-            with patch.object(self.app.llm, "generate", side_effect=generate):
-                self.app.capture()
-                self.assertTrue(entered.wait(2))
-                future = self.app.future
-                self.app.enqueue(self.app.close)
-                self.app.poll()
-                self.assertIs(self.app.screenshots.state, Lifecycle.CANCELLED)
-                self.app.hud.root.destroy.assert_not_called()
-                release.set()
-                future.result(timeout=2)
-                self.app.poll()
-                self.app.hud.root.destroy.assert_called_once()
-
-    def test_screenshot_excludes_audio_and_repeat_until_cancelled_worker_returns(self):
+    def test_cancel_and_late_result(self):
         entered, release = threading.Event(), threading.Event()
 
-        def generate(data, mime_type, prompt, publish, cancel, **kwargs):
+        def generate(*args, **kwargs):
             entered.set()
+            args[3]("partial")
             release.wait(2)
-            publish("stale")
-            return "stale"
+            args[3]("late")
+            return "Вопрос: Late?\nОтвет: late"
 
-        with patch.object(
-            self.app.screen_capture, "capture", return_value=b"jpg"
-        ) as shot:
-            with patch.object(self.app.llm, "generate", side_effect=generate):
-                self.app.capture()
-                self.assertTrue(entered.wait(1))
-                future = self.app.future
-                self.app.audio()
-                self.app.snip()
-                self.app.capture()
-                self.assertIs(self.app.tasks.state, State.IDLE)
-                self.app.cancel()
-                self.app.capture()
-                self.assertEqual(shot.call_count, 1)
-                release.set()
-                future.result(2)
-                self.app.poll()
-                self.assertIsNone(self.app.screenshot_id)
-                self.assertNotIn("stale", str(self.app.hud.update_text.call_args_list))
-
-    def test_screenshot_timeout_drops_late_response_and_history(self):
-        self.app.settings.task_timeout = 0.1
-        entered, released = threading.Event(), threading.Event()
-
-        def generate(data, mime_type, prompt, publish, cancel, **kwargs):
-            entered.set()
-            self.assertTrue(cancel.wait(2))
-            publish("late")
-            released.set()
-            return "Вопрос: Поздний?\nОтвет: Поздний"
-
-        with (
-            patch.object(self.app.screen_capture, "capture", return_value=b"jpg"),
-            patch.object(self.app.llm, "generate", side_effect=generate),
-        ):
+        with patch.object(self.deps.llm, "generate", side_effect=generate):
             self.app.capture()
             self.assertTrue(entered.wait(1))
-            future = self.app.future
-            self.assertTrue(released.wait(2))
-            future.result(2)
-            self.app.poll()
-            self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
-            self.assertNotIn("late", str(self.app.hud.update_text.call_args_list))
-            self.assertTrue(
-                any(
-                    "Превышено" in str(c)
-                    for c in self.app.hud.update_text.call_args_list
-                )
-            )
+            self.app.cancel()
+            self.app.capture()
+            self.app.audio()
+            self.assertTrue(self.app.orchestrator.busy)
+            release.set()
+            views = self.finish()
+        self.assertFalse(any(v.text and "late" in v.text for v in views))
+        self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
+        self.app.capture()
+        self.finish()
 
-    def test_screenshot_error_does_not_leak_exception_or_history(self):
+    def test_timeout_and_error_recovery(self):
+        self.settings.task_timeout = 0.05
+
+        def generate(*args, **kwargs):
+            args[4].wait(1)
+            return "late"
+
+        with patch.object(self.deps.llm, "generate", side_effect=generate):
+            self.app.capture()
+            views = self.finish()
+        self.assertTrue(any(v.status == "ОШИБКА" for v in views))
+        self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
+        with patch.object(self.deps.screen, "capture", side_effect=OSError("private")):
+            self.app.capture()
+            views = self.finish()
+            self.assertNotIn("private", str(views))
+        self.app.capture()
+        self.finish()
+
+    def test_vad_fifo_and_continues_during_review(self):
+        self.settings.vad_enabled = True
+        emitted = threading.Event()
+
+        def record(stop, cancel, *args, **kwargs):
+            kwargs["on_segment"](1, b"one")
+            kwargs["on_segment"](2, b"two")
+            emitted.set()
+            stop.wait(2)
+            return b""
+
+        self.deps.audio.record.side_effect = record
         with patch.object(
-            self.app.screen_capture, "capture", side_effect=OSError("secret")
-        ):
+            self.deps.llm, "transcribe", side_effect=["one", "two"]
+        ) as transcribe:
+            self.app.audio()
+            self.assertTrue(emitted.wait(1))
             self.app.capture()
-            self.app.future.result(2)
+            self.app.snip()
             self.app.poll()
-        self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
-        self.assertNotIn("secret", str(self.app.hud.update_text.call_args_list))
-        self.app.hud.update_text.assert_called_with(
-            "Ошибка выполнения задачи.", "ОШИБКА"
-        )
+            for question in ("one", "two"):
+                self.finish()
+                self.assertTrue(self.app.monitoring)
+                self.app.confirm(self.app.active.request.task_id, question)
+                self.finish()
+            self.assertEqual(
+                [c.args[0] for c in transcribe.call_args_list], [b"one", b"two"]
+            )
+            self.app.cancel()
+            self.app.source_future.result(2)
+            self.app.poll()
+            self.assertIsNone(self.app.source_future)
 
-    def test_completed_response_enters_history_and_is_reused(self):
-        with patch.object(self.app.screen_capture, "capture", return_value=b"jpg"):
-            with patch.object(
-                self.app.llm,
-                "generate",
-                return_value="Вопрос: Первый?\nОтвет: Первый ответ",
-            ) as generate:
-                self.app.capture()
-                self.app.future.result(timeout=2)
-                self.app.poll()
-                self.app.capture()
-                self.app.future.result(timeout=2)
-                self.app.poll()
-                history = generate.call_args.kwargs["history"]
-                self.assertEqual(history[0].question, "Первый?")
-                self.assertEqual(history[0].answer, "Первый ответ")
-
-    def test_cancelled_response_never_enters_history(self):
+    def test_close_and_repeat(self):
         entered = threading.Event()
 
-        def generate(data, mime_type, prompt, publish, cancel, **kwargs):
+        def generate(*args, **kwargs):
             entered.set()
-            cancel.wait(2)
-            return "Вопрос: Поздний?\nОтвет: Поздний ответ"
+            args[4].wait(2)
+            return "late"
 
-        with patch.object(self.app.screen_capture, "capture", return_value=b"jpg"):
-            with patch.object(self.app.llm, "generate", side_effect=generate):
-                self.app.capture()
-                self.assertTrue(entered.wait(2))
-                future = self.app.future
-                self.app.cancel()
-                future.result(timeout=2)
-                self.app.poll()
-                self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
-
-    def test_pending_cancel_discards_completed_screenshot_before_ui_delivery(self):
-        with (
-            patch.object(self.app.screen_capture, "capture", return_value=b"jpg"),
-            patch.object(
-                self.app.llm,
-                "generate",
-                return_value="Вопрос: Секрет?\nОтвет: Поздний",
-            ),
-        ):
+        with patch.object(self.deps.llm, "generate", side_effect=generate):
             self.app.capture()
-            self.app.future.result(2)
-            self.app.cancel_requested.set()
-            self.app._poll_screenshot()
-        self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
-        self.assertNotIn("Поздний", str(self.app.hud.update_text.call_args_list))
-
-    def test_vad_recording_reaches_transcription_and_can_be_cancelled(self):
-        self.app.settings.vad_enabled = True
-        entered = threading.Event()
-
-        def record(
-            stop, cancel, seconds, max_bytes, device, vad_options=None, on_segment=None
-        ):
-            self.assertEqual(vad_options["sensitivity"], 2)
-            entered.set()
-            cancel.wait(2)
-            return b""
-
-        with patch.object(self.app.audio_capture, "record", side_effect=record):
-            with patch.object(self.app.llm, "transcribe") as transcribe:
-                self.app.audio()
-                self.assertTrue(entered.wait(2))
-                future = self.app.capture_future
-                self.app.cancel()
-                future.result(timeout=2)
-                self.app.poll()
-                transcribe.assert_not_called()
-                self.assertFalse(self.app.monitoring)
-                self.assertIs(self.app.tasks.state, State.IDLE)
-
-    def test_repeated_vad_start_stop_releases_capture_and_queue(self):
-        self.app.settings.vad_enabled = True
-
-        def record(stop, cancel, seconds, max_bytes, device, **kwargs):
-            stop.wait(2)
-            return b""
-
-        with patch.object(self.app.audio_capture, "record", side_effect=record):
-            for _ in range(30):
-                self.app.audio()
-                future = self.app.capture_future
-                self.assertIsNotNone(future)
-                self.app.cancel()
-                future.result(timeout=2)
-                self.app.poll()
-                self.assertFalse(self.app.monitoring)
-                self.assertIsNone(self.app.capture_future)
-                self.assertIsNone(self.app.segments)
-                self.assertIs(self.app.tasks.state, State.IDLE)
-
-    def test_snipping_is_blocked_while_vad_capture_active(self):
-        self.app.settings.vad_enabled = True
-        entered = threading.Event()
-
-        def record(stop, cancel, seconds, max_bytes, device, **kwargs):
-            entered.set()
-            stop.wait(2)
-            return b""
-
-        with patch.object(self.app.audio_capture, "record", side_effect=record):
-            with patch("main.SnippingOverlay") as overlay:
-                self.app.audio()
-                self.assertTrue(entered.wait(1))
-                self.app.snip()
-                overlay.assert_not_called()
-                future = self.app.capture_future
-                self.app.cancel()
-                future.result(2)
-                self.app.poll()
-
-    def test_pending_cancel_discards_legacy_task_result_before_delivery(self):
-        task = self.app.tasks.begin(State.PROCESSING)
-        generation, _ = self.app.sessions.snapshot("TEST")
-        self.app.session_task = (task, "TEST", generation)
-
-        def result():
-            self.app.cancel_requested.set()
-            return "Вопрос: Частный?\nОтвет: Поздний"
-
-        self.app.future = Mock()
-        self.app.future.done.return_value = True
-        self.app.future.result.side_effect = result
-        self.app.poll()
-        self.assertTrue(task.cancel.is_set())
-        self.assertEqual(self.app.sessions.snapshot("TEST")[1], ())
-        self.assertNotIn("Поздний", str(self.app.hud.update_text.call_args_list))
-
-    def test_review_adapter_submits_edited_question_and_stores_success(self):
-        task = self.app.tasks.begin(State.REVIEW)
-        generation, _ = self.app.sessions.snapshot("INTERVIEW")
-        self.app.session_task = (task, "INTERVIEW", generation)
-        with (
-            patch("main.TranscriptReview") as review,
-            patch.object(
-                self.app.llm, "generate", return_value="Готовый ответ"
-            ) as generate,
-        ):
-            self.app.show_transcript(task, "исходный текст")
-            review.call_args.args[2]("исправленный вопрос")
-            self.app.future.result(timeout=2)
+            self.assertTrue(entered.wait(1))
+            self.app.close()
+            self.app.close()
+            self.app.orchestrator.future.result(2)
             self.app.poll()
-        review.return_value.destroy.assert_called_once()
-        self.assertEqual(generate.call_args.args[0], "исправленный вопрос".encode())
-        history = self.app.sessions.snapshot("INTERVIEW")[1]
-        self.assertEqual(history[0].question, "исправленный вопрос")
-        self.assertEqual(history[0].answer, "Готовый ответ")
-
-    def test_vad_segment_reaches_transcription_review(self):
-        self.app.settings.vad_enabled = True
-        emitted = threading.Event()
-
-        def record(
-            stop, cancel, seconds, max_bytes, device, vad_options=None, on_segment=None
-        ):
-            on_segment(1, b"vad wav")
-            emitted.set()
-            stop.wait(2)
-            return b""
-
-        with patch.object(self.app.audio_capture, "record", side_effect=record):
-            with patch.object(
-                self.app.llm, "transcribe", return_value="речь"
-            ) as transcribe:
-                with patch.object(self.app, "show_transcript") as review:
-                    self.app.audio()
-                    self.assertTrue(emitted.wait(2))
-                    self.app.poll()
-                    self.app.future.result(timeout=2)
-                    self.app.poll()
-                    self.assertIs(self.app.tasks.state, State.REVIEW)
-                    self.assertEqual(transcribe.call_args.args[0], b"vad wav")
-                    review.assert_called_once()
-                    self.app.cancel()
-                    self.app.capture_future.result(timeout=2)
-
-    def test_same_vad_transcript_is_shown_again(self):
-        self.app.settings.vad_enabled = True
-        emitted = threading.Event()
-
-        def record(
-            stop, cancel, seconds, max_bytes, device, vad_options=None, on_segment=None
-        ):
-            on_segment(1, b"one")
-            on_segment(2, b"two")
-            emitted.set()
-            stop.wait(2)
-            return b""
-
-        with patch.object(self.app.audio_capture, "record", side_effect=record):
-            with patch.object(self.app.llm, "transcribe", return_value="Повтор"):
-                with patch.object(self.app, "show_transcript") as review:
-                    self.app.audio()
-                    self.assertTrue(emitted.wait(2))
-                    self.app.poll()
-                    self.app.future.result(timeout=2)
-                    self.app.poll()
-                    self.assertIs(self.app.tasks.state, State.REVIEW)
-                    self.app.tasks.finish(self.app.tasks.active)
-                    self.app.poll()
-                    self.app.future.result(timeout=2)
-                    self.app.poll()
-                    self.assertEqual(review.call_count, 2)
-                    self.app.cancel()
-                    self.app.capture_future.result(timeout=2)
+        self.assertTrue(self.app.stopped)

@@ -29,11 +29,11 @@ class ProviderTests(unittest.TestCase):
                 app.future.result(2)
                 app.poll()
             self.assertEqual(app.sessions.snapshot("TEST")[1][0].answer, "Ответ")
-            self.assertIsNone(app.screenshot_id)
+            self.assertIsNone(app.controller.active)
         finally:
-            app.screenshots.close(timeout=1)
-            app.worker.shutdown()
-            app.capture_worker.shutdown()
+            app.controller.orchestrator.close(timeout=1)
+            app.controller.close()
+            app.controller._source.shutdown(wait=True)
 
     def test_offline_generation_stream_and_transcription(self):
         provider = MockProvider(chunks=("one", " two"))

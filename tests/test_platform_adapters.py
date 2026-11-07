@@ -65,7 +65,7 @@ class PlatformTests(unittest.TestCase):
             screen=screen,
             audio=audio,
             hotkeys=hotkeys,
-            screenshots=orchestrator,
+            orchestrator=orchestrator,
         )
         with patch("main.StealthHUD"):
             app = GhostAssistApp(settings, dependencies=dependencies)
@@ -78,8 +78,8 @@ class PlatformTests(unittest.TestCase):
             self.assertFalse(orchestrator.busy)
         finally:
             orchestrator.close(timeout=1)
-            app.worker.shutdown()
-            app.capture_worker.shutdown()
+            app.controller.close()
+            app.controller._source.shutdown(wait=True)
 
     def test_fake_audio_honours_stop_and_cancel(self):
         stop, cancel = threading.Event(), threading.Event()
